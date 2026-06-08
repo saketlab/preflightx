@@ -1,0 +1,64 @@
+name: release
+
+# Build cross-platform binaries and attach them to the GitHub Release on a v* tag
+# push. workflow_dispatch allows a manual build from the Actions tab.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # required to create the Release and upload assets
+
+jobs:
+  # upload-rust-binary-action uploads to an existing Release, so create it first
+  # (idempotent — safe on workflow re-runs).
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the GitHub Release for this tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$REPO" --title "$TAG" --generate-notes
+
+  release:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # vendor/seqspec is embedded at build time
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build and upload release archive
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: preflightx
+          target: ${{ matrix.target }}
+          # e.g. preflightx-v0.1.0-x86_64-unknown-linux-gnu.{tar.gz,zip}
+          archive: $bin-$tag-$target
+          include: README.md,LICENSE
+          checksum: sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,3 @@
+[submodule "vendor/seqspec"]
+	path = vendor/seqspec
+	url = https://github.com/pachterlab/seqspec
