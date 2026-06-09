@@ -31,9 +31,20 @@ WASM="target/wasm32-unknown-unknown/$PROFILE/preflightx.wasm"
 echo ">> wasm-bindgen ($(wasm-bindgen --version))"
 wasm-bindgen --target web --no-typescript --out-dir "$OUT_DIR" "$WASM"
 
+# Size optimization (best-effort). Modern rustc emits bulk-memory/sign-ext/etc., which
+# older wasm-opt rejects unless enabled; write to a temp file and only swap on success
+# so a failed/old wasm-opt never corrupts or blocks the build.
 if command -v wasm-opt >/dev/null 2>&1; then
-  echo ">> wasm-opt -Oz"
-  wasm-opt -Oz "$OUT_DIR/preflightx_bg.wasm" -o "$OUT_DIR/preflightx_bg.wasm"
+  echo ">> wasm-opt -Oz ($(wasm-opt --version 2>/dev/null | head -1))"
+  if wasm-opt -Oz \
+       --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
+       --enable-mutable-globals --enable-multivalue --enable-reference-types \
+       "$OUT_DIR/preflightx_bg.wasm" -o "$OUT_DIR/preflightx_bg.wasm.opt"; then
+    mv "$OUT_DIR/preflightx_bg.wasm.opt" "$OUT_DIR/preflightx_bg.wasm"
+  else
+    echo ">> wasm-opt failed; shipping the unoptimized wasm"
+    rm -f "$OUT_DIR/preflightx_bg.wasm.opt"
+  fi
 fi
 
 echo ">> done -> $OUT_DIR/"

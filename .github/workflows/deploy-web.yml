@@ -24,6 +24,7 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,9 +86,9 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p "${SSH_PORT:-22}" "$SSH_HOST" >> ~/.ssh/known_hosts
-          rsync -az --delete-after \
-            -e "ssh -i ~/.ssh/deploy_key -p ${SSH_PORT:-22}" \
+          ssh-keyscan -T 15 -p "${SSH_PORT:-22}" "$SSH_HOST" >> ~/.ssh/known_hosts
+          SSH="ssh -i ~/.ssh/deploy_key -p ${SSH_PORT:-22} -o BatchMode=yes -o ConnectTimeout=30"
+          rsync -az --delete-after --timeout=120 -e "$SSH" \
             web/ "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
 
       - name: Remove deploy key
