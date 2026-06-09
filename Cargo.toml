@@ -11,18 +11,43 @@ categories = ["command-line-utilities", "science"]
 readme = "README.md"
 rust-version = "1.74"
 
+# Build the CLI binary (native) and a cdylib for the browser/WASM build.
+# `rlib` lets the `preflightx` bin link the same crate; `cdylib` is what
+# wasm-bindgen consumes. Native builds ignore the cdylib output.
+[lib]
+name = "preflightx"
+crate-type = ["rlib", "cdylib"]
+
+# Dependencies shared by both the native CLI and the WASM library.
+# flate2's default backend is the pure-Rust `miniz_oxide` (`rust_backend`),
+# which compiles to wasm32 — so gzip works in the browser with no C deps.
 [dependencies]
-clap = { version = "4.5", features = ["derive"] }
-needletail = "0.5"
 anyhow = "1.0"
 thiserror = "1.0"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 flate2 = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-dirs = "5.0"
 colored = "2.1"
 serde_norway = "0.9.42"
+
+# Native-only: the CLI front-end (clap), remote/streamed input (reqwest, blocking),
+# the platform cache dir (dirs), and needletail with its full compression set
+# (gzip + bzip2 + xz — the latter two are C-backed and not wasm-compatible).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+clap = { version = "4.5", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+dirs = "5.0"
+needletail = "0.5"
+
+# WASM-only: needletail restricted to the pure-Rust gzip path, plus the
+# wasm-bindgen glue. console_error_panic_hook surfaces Rust panics in the
+# browser console instead of an opaque "unreachable executed".
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+needletail = { version = "0.5", default-features = false, features = ["flate2"] }
+# Pinned to the locally installed `wasm-bindgen` CLI (must match exactly).
+# Bump both together: `cargo install wasm-bindgen-cli --version <x>` then edit here.
+wasm-bindgen = "=0.2.114"
+console_error_panic_hook = "0.1"
 
 [profile.release]
 opt-level = 3

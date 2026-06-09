@@ -679,7 +679,7 @@ mod tests {
             "template.spec.yaml",
             "tang2009.spec.yaml", // upstream `name:` is the bogus "10x Genomics"
             "10xv3_scrnaseq_element_adept_truseq_dual.spec.yaml", // name: "Example assay"
-            "10xv3_scrnaseq_illumina_truseq_dual.spec.yaml",      // name: "Example assay"
+            "10xv3_scrnaseq_illumina_truseq_dual.spec.yaml", // name: "Example assay"
         ];
         let assays: Vec<Assay> = embedded_assays()
             .into_iter()

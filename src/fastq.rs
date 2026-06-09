@@ -1,12 +1,58 @@
 use anyhow::{Context, Result};
-use needletail::{parse_fastx_file, parse_fastx_reader, FastxReader};
+use needletail::{parse_fastx_reader, FastxReader};
 use std::path::Path;
+
+#[cfg(not(target_arch = "wasm32"))]
+use needletail::parse_fastx_file;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::OnceLock;
 
+#[cfg(not(target_arch = "wasm32"))]
 static HTTP_CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
 
+#[cfg(not(target_arch = "wasm32"))]
 fn http_client() -> &'static reqwest::blocking::Client {
     HTTP_CLIENT.get_or_init(reqwest::blocking::Client::new)
+}
+
+/// In-browser virtual file system. The wasm-bindgen entry point ([`crate::wasm`])
+/// loads the uploaded FASTQ bytes here keyed by a synthetic name (e.g. `"r1"`),
+/// then calls the unchanged `&Path`-based analysis functions with that name as
+/// the path. `open()` resolves such a path to an in-memory reader, so the entire
+/// analysis layer is shared with the native build with no signature changes.
+#[cfg(target_arch = "wasm32")]
+pub mod vfs {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static FILES: RefCell<HashMap<String, Vec<u8>>> = RefCell::new(HashMap::new());
+    }
+
+    /// Store `bytes` (raw file contents, possibly gzipped) under `name`.
+    pub fn put(name: &str, bytes: Vec<u8>) {
+        FILES.with(|f| f.borrow_mut().insert(name.to_string(), bytes));
+    }
+
+    /// Fetch a stored buffer by name, if present.
+    pub fn get(name: &str) -> Option<Vec<u8>> {
+        FILES.with(|f| f.borrow().get(name).cloned())
+    }
+
+    /// Drop a single stored buffer.
+    pub fn remove(name: &str) {
+        FILES.with(|f| f.borrow_mut().remove(name));
+    }
+
+    /// True if any stored key starts with `prefix` (used to detect cached onlists).
+    pub fn has_prefix(prefix: &str) -> bool {
+        FILES.with(|f| f.borrow().keys().any(|k| k.starts_with(prefix)))
+    }
+
+    /// Drop all stored buffers (call after a run to free memory).
+    pub fn clear() {
+        FILES.with(|f| f.borrow_mut().clear());
+    }
 }
 
 /// True if `path` is an http(s) URL rather than a local filesystem path.
@@ -15,12 +61,19 @@ pub fn is_remote(path: &Path) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
 }
 
-/// Open a fastx reader for either a local file or an http(s) URL.
+/// True if `bytes` begin with the gzip magic number.
+pub fn is_gzip(bytes: &[u8]) -> bool {
+    bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b
+}
+
+/// Open a fastx reader for a local file, an http(s) URL, or (on wasm) an
+/// in-memory buffer from [`vfs`].
 ///
 /// Remote inputs are streamed: we only pull bytes as records are consumed, so
 /// sampling the first N reads of a multi-GB remote fastq downloads just the
 /// leading chunk, not the whole file. Compression (gzip/bz2/xz) is detected
 /// from the stream's magic bytes by needletail, exactly as for local files.
+#[cfg(not(target_arch = "wasm32"))]
 fn open(path: &Path) -> Result<Box<dyn FastxReader>> {
     if is_remote(path) {
         let url = path.to_string_lossy();
@@ -36,6 +89,52 @@ fn open(path: &Path) -> Result<Box<dyn FastxReader>> {
     }
 }
 
+/// Wasm build: there is no filesystem and no blocking network. Input must have
+/// been registered in [`vfs`] by the bindgen entry point.
+///
+/// needletail's built-in compression sniffing is gated behind its `compression`
+/// feature, which also pulls in the C-backed bz2/xz decoders that don't build
+/// for wasm. We therefore link only `flate2` and detect+decompress gzip here by
+/// hand (the common case for FASTQ); the decoder is streaming, so sampling the
+/// first N reads never inflates the whole buffer. Plain (uncompressed) FASTQ is
+/// passed straight through; bz2/xz inputs are unsupported in the browser.
+#[cfg(target_arch = "wasm32")]
+fn open(path: &Path) -> Result<Box<dyn FastxReader>> {
+    use std::io::Cursor;
+    let key = path.to_string_lossy();
+    let bytes = vfs::get(&key).with_context(|| {
+        format!("no in-memory fastq registered as {key:?} (wasm build has no filesystem)")
+    })?;
+    if is_gzip(&bytes) {
+        let dec = flate2::read::MultiGzDecoder::new(Cursor::new(bytes));
+        parse_fastx_reader(dec).with_context(|| format!("parsing in-memory gzip fastq: {key}"))
+    } else {
+        parse_fastx_reader(Cursor::new(bytes))
+            .with_context(|| format!("parsing in-memory fastq: {key}"))
+    }
+}
+
+/// Pull the next record, or `None` at end of stream. A parse error becomes `None`
+/// on wasm — a Range-sliced remote gzip can truncate its final record, so we keep
+/// what was already read — but stays a hard error on native.
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+fn next_record<'a>(
+    reader: &'a mut dyn FastxReader,
+    path: &Path,
+) -> Result<Option<needletail::parser::SequenceRecord<'a>>> {
+    match reader.next() {
+        Some(Ok(r)) => Ok(Some(r)),
+        None => Ok(None),
+        Some(Err(_e)) => {
+            #[cfg(target_arch = "wasm32")]
+            return Ok(None);
+            #[cfg(not(target_arch = "wasm32"))]
+            return Err(anyhow::Error::new(_e))
+                .with_context(|| format!("parsing {}", path.display()));
+        }
+    }
+}
+
 /// Iterate up to `n` records from a fastq(.gz) file or URL, calling `cb` with (seq, qual).
 /// `qual` is the raw PHRED+33 byte slice; subtract 33 for the score.
 pub fn for_each_record<F>(path: &Path, n: usize, mut cb: F) -> Result<usize>
@@ -44,8 +143,7 @@ where
 {
     let mut reader = open(path)?;
     let mut seen = 0usize;
-    while let Some(rec) = reader.next() {
-        let r = rec.with_context(|| format!("parsing record in {}", path.display()))?;
+    while let Some(r) = next_record(reader.as_mut(), path)? {
         cb(&r.seq(), r.qual());
         seen += 1;
         if seen >= n {
@@ -91,18 +189,12 @@ where
         let mut b2: Vec<Vec<u8>> = Vec::with_capacity(batch_size);
 
         while b1.len() < batch_size && total < n_max {
-            let s1 = match r1_rd.next() {
-                Some(r) => r
-                    .with_context(|| format!("parsing {}", r1.display()))?
-                    .seq()
-                    .to_vec(),
+            let s1 = match next_record(r1_rd.as_mut(), r1)? {
+                Some(r) => r.seq().to_vec(),
                 None => break,
             };
-            let s2 = match r2_rd.next() {
-                Some(r) => r
-                    .with_context(|| format!("parsing {}", r2.display()))?
-                    .seq()
-                    .to_vec(),
+            let s2 = match next_record(r2_rd.as_mut(), r2)? {
+                Some(r) => r.seq().to_vec(),
                 None => break,
             };
             b1.push(s1);

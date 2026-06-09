@@ -4,6 +4,8 @@ Cargo.lock.bak
 .DS_Store
 dist/
 
-# Local agent / tooling artifacts (not part of the project)
-.claude/
-.brooks-lint-history.json
+# Generated WebAssembly bindings (produced by scripts/build-wasm.sh)
+web/pkg/
+
+# 10x barcode onlists fetched at deploy time (licensed, never committed)
+web/whitelists/

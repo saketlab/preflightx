@@ -70,6 +70,13 @@ pub struct ChemReport {
     pub umi_offset: usize,
     pub umi_len: usize,
     pub n_cb_candidates: usize,
+    /// False when the reads show no single-cell signal (bulk/genomic): no
+    /// barcode-length R1, no TSO, no whitelist overlap. When false, `assay_id`
+    /// is `"none"` and the call should be read as "not single-cell".
+    pub is_single_cell: bool,
+    /// True when sampling stopped early (SPRT decided), so `reads_sampled < n` is
+    /// expected rather than a truncated input.
+    pub early_stop: bool,
     pub whitelist: Option<String>,
     pub whitelist_scores: Vec<WhitelistScore>,
     pub anchor_scores: Vec<AnchorScore>,
@@ -89,18 +96,35 @@ pub fn detect(
     // 4. score (pure), 5. assemble the report (pure). Steps 4-5 are unit-tested
     // directly via `analyze`; the I/O steps are thin and orientation-preserving.
     let (eff_r1, eff_r2, swapped) = orient(r1, r2)?;
-    let (r1_seqs, r2_seqs, sprt_tso_hits) =
-        sample_reads(eff_r1, eff_r2, n, whitelist_cache.is_some())?;
+    let s = sample_reads(eff_r1, eff_r2, n, whitelist_cache.is_some())?;
 
-    let dominant = dominant_len(&r1_seqs);
+    let dominant = dominant_len(&s.r1);
     let candidates = candidates_for(dominant);
     let wl_sets = match whitelist_cache {
         Some(cache) => load_candidate_whitelists(cache, &candidates)?,
         None => HashMap::new(),
     };
 
-    let analysis = analyze(&r1_seqs, &r2_seqs, &wl_sets, sprt_tso_hits);
-    Ok(build_report(analysis, swapped, n))
+    let analysis = analyze(&s.r1, &s.r2, &wl_sets, s.sprt_tso_hits);
+    Ok(build_report(analysis, swapped, n, s.early_stop))
+}
+
+/// Distinct whitelist filenames relevant to the pair's observed R1 geometry.
+/// The wasm front-end calls this to fetch only the matching onlist before
+/// `detect`, instead of pulling every catalogued whitelist.
+pub fn candidate_whitelist_files(r1: &Path, r2: &Path, n: usize) -> Result<Vec<&'static str>> {
+    let (eff_r1, _, _) = orient(r1, r2)?;
+    let (sample, _) = fastq::sample(eff_r1, n.min(2_000))?;
+    let dominant = dominant_len(&sample);
+    let mut files = Vec::new();
+    for spec in candidates_for(dominant) {
+        if let Some(wl) = &spec.whitelist {
+            if !files.contains(&wl.filename) {
+                files.push(wl.filename);
+            }
+        }
+    }
+    Ok(files)
 }
 
 /// Quick-sample both inputs to decide which file carries the barcode read. If R1
@@ -118,41 +142,56 @@ fn orient<'a>(r1: &'a Path, r2: &'a Path) -> Result<(&'a Path, &'a Path, bool)> 
     })
 }
 
-/// Sample up to `n` read pairs. Without a whitelist cache, SPRT stops as soon as the
-/// TSO signal is decisive (and the running TSO hit count is returned to seed the anchor
-/// scan); with a cache, collect the full `n` so the CB set is large enough to score
-/// whitelist overlap.
-#[allow(clippy::type_complexity)]
-fn sample_reads(
-    eff_r1: &Path,
-    eff_r2: &Path,
-    n: usize,
-    have_cache: bool,
-) -> Result<(Vec<Vec<u8>>, Vec<Vec<u8>>, Option<usize>)> {
+/// Sampled reads plus how sampling ended: the running TSO count (SPRT path only)
+/// and whether SPRT stopped early because the TSO signal was already decisive.
+struct Sampled {
+    r1: Vec<Vec<u8>>,
+    r2: Vec<Vec<u8>>,
+    sprt_tso_hits: Option<usize>,
+    early_stop: bool,
+}
+
+/// Sample up to `n` read pairs. With a whitelist cache, collect the full `n` (the CB
+/// set must be large to score overlap); without one, SPRT stops as soon as the TSO
+/// signal is decisive.
+fn sample_reads(eff_r1: &Path, eff_r2: &Path, n: usize, have_cache: bool) -> Result<Sampled> {
     if have_cache {
-        let mut r1v = Vec::with_capacity(n);
-        let mut r2v = Vec::with_capacity(n);
+        let mut r1 = Vec::with_capacity(n);
+        let mut r2 = Vec::with_capacity(n);
         fastq::stream_paired_batched(eff_r1, eff_r2, n, 10_000, |mut b1, mut b2| {
-            r1v.append(&mut b1);
-            r2v.append(&mut b2);
+            r1.append(&mut b1);
+            r2.append(&mut b2);
             true
         })?;
-        Ok((r1v, r2v, None))
+        Ok(Sampled {
+            r1,
+            r2,
+            sprt_tso_hits: None,
+            early_stop: false,
+        })
     } else {
-        let mut r1v: Vec<Vec<u8>> = Vec::new();
-        let mut r2v: Vec<Vec<u8>> = Vec::new();
+        let mut r1: Vec<Vec<u8>> = Vec::new();
+        let mut r2: Vec<Vec<u8>> = Vec::new();
         let mut tso_hits: usize = 0;
+        let mut early_stop = false;
         fastq::stream_paired_batched(eff_r1, eff_r2, n, SPRT_BATCH, |mut b1, mut b2| {
             tso_hits += b2.iter().filter(|s| anchor_hit(s, &TSO_PRESENT)).count();
-            r1v.append(&mut b1);
-            r2v.append(&mut b2);
-            if r1v.len() < SPRT_MIN_READS {
+            r1.append(&mut b1);
+            r2.append(&mut b2);
+            if r1.len() < SPRT_MIN_READS {
                 return true;
             }
-            let llr = bernoulli_llr(tso_hits, r1v.len(), TSO_PRESENT.p_signal, P_TSO_BACKGROUND);
-            llr.abs() <= SPRT_THRESHOLD
+            let llr = bernoulli_llr(tso_hits, r1.len(), TSO_PRESENT.p_signal, P_TSO_BACKGROUND);
+            let keep_going = llr.abs() <= SPRT_THRESHOLD;
+            early_stop = !keep_going;
+            keep_going
         })?;
-        Ok((r1v, r2v, Some(tso_hits)))
+        Ok(Sampled {
+            r1,
+            r2,
+            sprt_tso_hits: Some(tso_hits),
+            early_stop,
+        })
     }
 }
 
@@ -169,10 +208,9 @@ fn load_candidate_whitelists(
                 continue;
             }
             let path = cache.join(wl.filename);
-            if !path.exists() {
-                continue;
+            if let Some(set) = load_whitelist_opt(&path, wl.cb_len)? {
+                sets.insert(wl.filename, set);
             }
-            sets.insert(wl.filename, load_whitelist(&path, wl.cb_len)?);
         }
     }
     Ok(sets)
@@ -192,6 +230,14 @@ struct Analysis {
     scored: Vec<(&'static AssaySpec, f64)>,
     confidence: &'static str,
     n_reads: usize,
+    /// TSO hit rate (%) in R2 and the best whitelist overlap (%), kept so the gate
+    /// and the report's notes share one computation.
+    tso_pct: f64,
+    max_wl_pct: f64,
+    /// Whether the reads carry any single-cell signal at all (a barcode-length R1,
+    /// a TSO, or whitelist overlap). False for bulk/genomic libraries, where the
+    /// scored "winner" is a meaningless force-fit and must not be reported as a call.
+    is_single_cell: bool,
 }
 
 /// Candidate assays for an observed R1 length: exact match, or +/-2 bp for
@@ -232,8 +278,10 @@ fn classify_confidence(
 ) -> &'static str {
     let best = scored.first().map(|(_, s)| *s).unwrap_or(0.0);
     let second = scored.get(1).map(|(_, s)| *s).unwrap_or(0.0);
-    let ll_per_read = best / n_reads as f64;
-    let gap_per_read = (best - second) / n_reads as f64;
+    // max(1) guards against 0/0 = NaN when no reads were parsed.
+    let denom = n_reads.max(1) as f64;
+    let ll_per_read = best / denom;
+    let gap_per_read = (best - second) / denom;
     if ll_per_read > HIGH_LL_PER_READ && gap_per_read > HIGH_GAP_PER_READ && has_wl {
         "high"
     } else if ll_per_read > MEDIUM_LL_PER_READ || (candidates.len() == 1 && dominant > 0) {
@@ -334,6 +382,13 @@ fn analyze(
     let has_wl = !wl_scores.is_empty();
     let confidence = classify_confidence(&scored, &candidates, dominant, n_reads, has_wl);
 
+    // Single-cell plausibility gate: real single-cell data has a barcode-length R1
+    // (seqspec geometry), or a TSO, or whitelist overlap. Bulk/WGS has none, so this
+    // stops a 100 bp genomic R1 from being force-fit to a 10x assay.
+    let tso_pct = anchor_pcts.get(TSO_PRESENT.seq).copied().unwrap_or(0.0);
+    let max_wl_pct = wl_scores.values().map(|(_, p)| *p).fold(0.0_f64, f64::max);
+    let is_single_cell = fits_barcode_len(dominant) || tso_pct >= 10.0 || max_wl_pct >= 50.0;
+
     Analysis {
         dominant,
         len_dist,
@@ -344,13 +399,18 @@ fn analyze(
         scored,
         confidence,
         n_reads,
+        tso_pct,
+        max_wl_pct,
+        is_single_cell,
     }
 }
 
 /// Turn a scored `Analysis` into the serializable report: winner geometry, tool
 /// hints, whitelist/anchor tables, the evidence ledger, and human-facing notes.
-/// `n_requested` is the read budget asked for (to phrase the SPRT early-stop note).
-fn build_report(a: Analysis, swapped: bool, n_requested: usize) -> ChemReport {
+/// `n_requested` is the read budget asked for; `early_stop` is true when SPRT
+/// decided before reaching it (so a short sample is explained, not mistaken for a
+/// truncated input).
+fn build_report(a: Analysis, swapped: bool, n_requested: usize, early_stop: bool) -> ChemReport {
     let Analysis {
         dominant,
         len_dist,
@@ -361,55 +421,123 @@ fn build_report(a: Analysis, swapped: bool, n_requested: usize) -> ChemReport {
         scored,
         confidence,
         n_reads,
+        tso_pct,
+        max_wl_pct,
+        is_single_cell,
     } = a;
 
+    // A non-single-cell library has no real chemistry to report, and its scored
+    // winner is a force-fit; never present it as a confident call.
+    let confidence = if is_single_cell { confidence } else { "low" };
     let has_wl = !wl_scores.is_empty();
     let cb_sizes: HashMap<(usize, usize), usize> =
         cb_sets.iter().map(|(k, v)| (*k, v.len())).collect();
     let winner = scored.first().map(|(s, _)| *s);
+    let runner = scored.get(1).map(|(s, _)| *s);
+
+    // 3'v2 and 5'v1 share both geometry and onlist; once the TSO no longer penalizes
+    // absence (one-sided LLR), the top two can tie and differ only in 3'/5' polarity.
+    // That polarity isn't recoverable from the reads, so report both rather than guess.
+    let gap = scored.first().map(|(_, s)| *s).unwrap_or(0.0)
+        - scored.get(1).map(|(_, s)| *s).unwrap_or(0.0);
+    let polarity_unresolved = match (winner, runner) {
+        (Some(w), Some(r)) => {
+            is_single_cell
+                && gap.abs() < 1.0
+                && same_geometry(w, r)
+                && w.id.contains("3prime") != r.id.contains("3prime")
+        }
+        _ => false,
+    };
+    // Can't claim "high" for a specific polarity when the polarity is unresolved.
+    let confidence = if polarity_unresolved && confidence == "high" {
+        "medium"
+    } else {
+        confidence
+    };
 
     let mut notes: Vec<String> = Vec::new();
-    if swapped {
-        notes.push("Input files appeared swapped (R1 was long, R2 was short); auto-oriented to treat the shorter file as R1 (barcodes).".into());
-    }
-    if n_reads < n_requested {
+    if !is_single_cell {
         notes.push(format!(
-            "SPRT early stop: chemistry decided after {} reads (of {} max).",
-            n_reads, n_requested
+            "No single-cell signal detected: R1 is {dominant}bp (single-cell barcode reads are typically ~24-30bp), \
+             TSO appears in {tso_pct:.0}% of R2 (background ~1%), and whitelist overlap is {max_wl_pct:.0}%. \
+             This looks like bulk or genomic sequencing, not single-cell."
         ));
-    }
-    // Chemistries like Drop-seq use random (non-whitelisted) barcodes, so there is no
-    // list to confirm them against and `fetch-whitelists` cannot help — say so instead
-    // of suggesting a download that won't change the verdict.
-    if winner.map(|w| w.whitelist.is_none()).unwrap_or(false) {
-        notes.push(format!(
-            "{} uses random (non-whitelisted) cell barcodes; no whitelist exists to confirm them, so confidence is capped at MEDIUM (geometry-only).",
-            winner.map(|w| w.display_name).unwrap_or("This chemistry"),
-        ));
-    } else if !has_wl {
-        notes.push(
-            "No whitelist cache; run `preflightx fetch-whitelists` for full disambiguation.".into(),
-        );
-    }
-    if confidence != "high" && scored.len() > 1 {
-        let alts: Vec<&str> = scored.iter().skip(1).take(3).map(|(s, _)| s.id).collect();
-        notes.push(format!("Other candidates: {}.", alts.join(", ")));
-    }
-    if let Some(w) = winner {
-        let expected = w.r1_expected_len();
-        if expected != dominant && dominant > 0 {
+        if let Some(w) = winner {
             notes.push(format!(
-                "R1 reads are {}bp but {} expects {}bp; library may have been sequenced at non-standard cycles.",
-                dominant, w.id, expected,
+                "If it were single-cell, the closest geometry would be {} ({}bp: CB{}+UMI{}) — but the evidence above does not support a single-cell call.",
+                w.display_name, w.r1_expected_len(), w.r1_cb_len, w.r1_umi_len,
             ));
         }
     }
+    if polarity_unresolved {
+        if let (Some(w), Some(r)) = (winner, runner) {
+            notes.insert(
+                0,
+                format!(
+                    "3' vs 5' is unresolved: {} and {} share the same {dominant}bp barcode geometry and the same onlist, and the R2 TSO is at background, so the reads alone can't tell them apart. Check the library-prep records to confirm which.",
+                    w.display_name, r.display_name,
+                ),
+            );
+        }
+    }
+    if swapped {
+        notes.push("Input files appeared swapped (R1 was long, R2 was short); auto-oriented to treat the shorter file as R1 (barcodes).".into());
+    }
+    if early_stop {
+        notes.push(format!(
+            "Stopped early after {n_reads} reads: the TSO signal was already decisive (sequential test), so more reads were not needed."
+        ));
+    } else if n_reads < n_requested {
+        notes.push(format!(
+            "Input ended after {n_reads} reads (fewer than the {n_requested} requested) — a short file or a sliced fetch."
+        ));
+    }
+    // The assay-specific notes below only make sense for a real single-cell call;
+    // skip them entirely when the reads are not single-cell.
+    if is_single_cell {
+        // Chemistries like Drop-seq use random (non-whitelisted) barcodes, so there is no
+        // list to confirm them against and `fetch-whitelists` cannot help — say so instead
+        // of suggesting a download that won't change the verdict.
+        if winner.map(|w| w.whitelist.is_none()).unwrap_or(false) {
+            notes.push(format!(
+                "{} uses random (non-whitelisted) cell barcodes; no whitelist exists to confirm them, so confidence is capped at MEDIUM (geometry-only).",
+                winner.map(|w| w.display_name).unwrap_or("This chemistry"),
+            ));
+        } else if !has_wl {
+            notes.push(
+                "No whitelist cache; run `preflightx fetch-whitelists` for full disambiguation."
+                    .into(),
+            );
+        }
+        if confidence != "high" && scored.len() > 1 {
+            let alts: Vec<&str> = scored.iter().skip(1).take(3).map(|(s, _)| s.id).collect();
+            notes.push(format!("Other candidates: {}.", alts.join(", ")));
+        }
+        if let Some(w) = winner {
+            let expected = w.r1_expected_len();
+            if expected != dominant && dominant > 0 {
+                notes.push(format!(
+                    "R1 reads are {}bp but {} expects {}bp; library may have been sequenced at non-standard cycles.",
+                    dominant, w.id, expected,
+                ));
+            }
+        }
+    }
 
-    let assay_id = winner.map(|w| w.id).unwrap_or("unknown").to_string();
-    let assay_display = winner
+    let mut assay_id = winner.map(|w| w.id).unwrap_or("unknown").to_string();
+    let mut assay_display = winner
         .map(|w| w.display_name)
         .unwrap_or("unknown")
         .to_string();
+    if !is_single_cell {
+        assay_id = "none".to_string();
+        assay_display = "Not single-cell".to_string();
+    } else if polarity_unresolved {
+        if let (Some(w), Some(r)) = (winner, runner) {
+            assay_display = format!("{} or {}", w.display_name, r.display_name);
+        }
+    }
     let cb_offset = winner.map(|w| w.r1_cb_offset).unwrap_or(0);
     let cb_len = winner.map(|w| w.r1_cb_len).unwrap_or(0);
     let umi_offset = winner.map(|w| w.umi_offset()).unwrap_or(0);
@@ -457,18 +585,36 @@ fn build_report(a: Analysis, swapped: bool, n_requested: usize) -> ChemReport {
         })
         .collect();
 
-    let interpretation = build_interpretation(
-        winner,
-        &scored,
-        dominant,
-        &candidates,
-        &anchor_pcts,
-        &wl_scores,
-        &cb_sizes,
-        n_reads,
-        has_wl,
-        confidence,
-    );
+    let mut interpretation = if is_single_cell {
+        build_interpretation(
+            winner,
+            &scored,
+            dominant,
+            &candidates,
+            &anchor_pcts,
+            &wl_scores,
+            &cb_sizes,
+            n_reads,
+            has_wl,
+            confidence,
+        )
+    } else {
+        build_not_single_cell_interpretation(dominant, tso_pct, max_wl_pct, n_reads, winner)
+    };
+    if polarity_unresolved {
+        if let (Some(w), Some(r)) = (winner, runner) {
+            interpretation.push(Evidence {
+                signal: "3' vs 5' polarity".into(),
+                observation: format!(
+                    "{} and {} tie: same {dominant}bp geometry and onlist, TSO at background",
+                    w.id, r.id,
+                ),
+                llr_contribution: None,
+                conclusion:
+                    "The reads carry no signal that separates 3' from 5' here, so both are reported. The R2 TSO would normally break this tie when present.".into(),
+            });
+        }
+    }
 
     ChemReport {
         r1_length_dominant: dominant,
@@ -482,6 +628,8 @@ fn build_report(a: Analysis, swapped: bool, n_requested: usize) -> ChemReport {
         umi_offset,
         umi_len,
         n_cb_candidates: n_cb,
+        is_single_cell,
+        early_stop,
         whitelist: whitelist_file,
         whitelist_scores: wl_scores_out,
         anchor_scores: anchor_scores_out,
@@ -508,8 +656,12 @@ fn log_likelihood_assay(
 /// The two are summed for ranking; kept separate so the interpretation report can
 /// attribute the verdict to each signal.
 ///
-/// TSO contribution: k*log(p_signal/P_TSO_BACKGROUND) + (n-k)*log((1-p_signal)/(1-P_TSO_BACKGROUND)).
-/// This is zero when p_signal == P_TSO_BACKGROUND (TSO_ABSENT assays contribute nothing).
+/// TSO contribution is **one-sided**: an observed TSO rate above background rewards
+/// the assays that expect it (positive LLR), but a rate at/below background adds 0
+/// rather than penalizing. Real 3' libraries often show ~background TSO-at-R2-start,
+/// so penalizing its absence wrongly rejected 3' and defaulted ambiguous 26 bp
+/// libraries (3'v2 vs 5'v1, same onlist) to 5'. `.max(0.0)` keeps presence as evidence
+/// while making absence non-informative.
 ///
 /// Whitelist contribution: LLR of observed match rate under P_WL_CORRECT vs P_WL_NULL.
 fn llr_components(
@@ -521,10 +673,9 @@ fn llr_components(
 ) -> (f64, f64) {
     let mut tso_ll = 0.0_f64;
     for anchor in spec.r2_anchors {
-        // TSO_ABSENT (p_signal == background) contributes 0 via bernoulli_llr.
         let pct = anchor_pcts.get(anchor.seq).copied().unwrap_or(0.0);
         let k = (pct / 100.0 * n_reads as f64).round() as usize;
-        tso_ll += bernoulli_llr(k, n_reads, anchor.p_signal, P_TSO_BACKGROUND);
+        tso_ll += bernoulli_llr(k, n_reads, anchor.p_signal, P_TSO_BACKGROUND).max(0.0);
     }
 
     let mut wl_ll = 0.0_f64;
@@ -569,7 +720,9 @@ fn build_interpretation(
         observation: format!("{dominant} bp dominant across {n_reads} reads"),
         llr_contribution: None,
         conclusion: format!(
-            "{} candidate assay(s) within \u{00b1}2 bp of {dominant} bp: {}",
+            "The barcode read length fixes the cell-barcode + UMI layout, so only {} \
+             chemistries with a ~{dominant} bp R1 (\u{00b1}2 bp) are possible. The next \
+             signals pick among them: {}",
             candidates.len(),
             cand_ids.join(", "),
         ),
@@ -584,20 +737,16 @@ fn build_interpretation(
             .iter()
             .filter_map(|a| anchor_pcts.get(a.seq).copied())
             .fold(0.0_f64, f64::max);
-        let p_expected = winner
-            .r2_anchors
-            .iter()
-            .map(|a| a.p_signal)
-            .fold(0.0, f64::max);
-        let conclusion = if p_expected > P_TSO_BACKGROUND {
+        // Wording follows the observed level, not the winner's model: only call it a
+        // TSO signal when it actually contributed evidence (one-sided, so absence = 0).
+        let conclusion = if tso_ll > 1.0 {
             format!(
-                "TSO {pct:.1}% vs {:.0}% background (3' model expects ~{:.0}%); 3' chemistry.",
+                "TSO present in {pct:.1}% of R2 (background ~{:.0}%): the template-switch oligo is detected, which marks 3' chemistry.",
                 P_TSO_BACKGROUND * 100.0,
-                p_expected * 100.0,
             )
         } else {
             format!(
-                "TSO {pct:.1}%, at the {:.0}% background; 5' chemistry (no TSO), no 3'/5' contribution.",
+                "TSO in only {pct:.1}% of R2, at the ~{:.0}% background: no template-switch signal, so the TSO can't tell 3' from 5' here.",
                 P_TSO_BACKGROUND * 100.0,
             )
         };
@@ -694,6 +843,63 @@ fn build_interpretation(
     ev
 }
 
+/// Evidence ledger for a library with no single-cell signal. Walks the same three
+/// signals the positive path uses, but each step says why it *fails* the test, so
+/// the reader sees exactly how we concluded "not single-cell" rather than a verdict.
+fn build_not_single_cell_interpretation(
+    dominant: usize,
+    tso_pct: f64,
+    max_wl_pct: f64,
+    n_reads: usize,
+    winner: Option<&AssaySpec>,
+) -> Vec<Evidence> {
+    let closest = winner
+        .map(|w| {
+            format!(
+                " The closest catalogued geometry is {} ({} bp).",
+                w.id,
+                w.r1_expected_len()
+            )
+        })
+        .unwrap_or_default();
+    vec![
+        Evidence {
+            signal: "Barcode geometry".into(),
+            observation: format!("R1 is {dominant} bp dominant across {n_reads} reads"),
+            llr_contribution: None,
+            conclusion: format!(
+                "Single-cell barcode reads are short (~24-30 bp: a cell barcode + UMI). \
+                 {dominant} bp does not match any catalogued single-cell geometry, so no \
+                 barcode read is present.{closest}"
+            ),
+        },
+        Evidence {
+            signal: "TSO (template-switch oligo)".into(),
+            observation: format!("TSO 13-mer in {tso_pct:.1}% of R2 (chance background ~1%)"),
+            llr_contribution: None,
+            conclusion: "A 10x 3' library carries the TSO in ~20% of R2 reads. At background \
+                         level here, there is no 3' single-cell signature."
+                .into(),
+        },
+        Evidence {
+            signal: "Barcode whitelist".into(),
+            observation: format!("{max_wl_pct:.1}% of R1 barcodes match any 10x onlist"),
+            llr_contribution: None,
+            conclusion: "Real cell barcodes hit their onlist almost completely. Near-zero \
+                         overlap means R1 is not a barcode read."
+                .into(),
+        },
+        Evidence {
+            signal: "Verdict".into(),
+            observation: "no barcode geometry + no TSO + no whitelist overlap".into(),
+            llr_contribution: None,
+            conclusion: "All three single-cell signals are absent. This is bulk or genomic \
+                         sequencing, not single-cell — no chemistry is reported."
+                .into(),
+        },
+    ]
+}
+
 /// Two assays share the same R1 geometry and whitelist, so they are indistinguishable by sequence.
 fn same_geometry(a: &AssaySpec, b: &AssaySpec) -> bool {
     a.r1_cb_offset == b.r1_cb_offset
@@ -742,18 +948,50 @@ fn scan_anchor(reads: &[Vec<u8>], anchor: &AnchorMotif) -> f64 {
     100.0 * hits as f64 / reads.len() as f64
 }
 
-fn load_whitelist(path: &Path, cb_len: usize) -> Result<HashSet<Vec<u8>>> {
-    use std::io::{BufRead, BufReader};
+/// Load a whitelist if it is present in the cache, else `None`. On native this
+/// reads the file from disk; on wasm it reads the bytes the front-end stashed in
+/// [`fastq::vfs`] under the same `cache/filename` key.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_whitelist_opt(path: &Path, cb_len: usize) -> Result<Option<HashSet<Vec<u8>>>> {
+    if !path.exists() {
+        return Ok(None);
+    }
     let f = std::fs::File::open(path)?;
-    let reader: Box<dyn std::io::Read> = if path.extension().and_then(|e| e.to_str()) == Some("gz")
-    {
-        Box::new(flate2::read::GzDecoder::new(f))
+    let gz = path.extension().and_then(|e| e.to_str()) == Some("gz");
+    let reader: Box<dyn std::io::Read> = if gz {
+        Box::new(flate2::read::MultiGzDecoder::new(f))
     } else {
         Box::new(f)
     };
-    let buf = BufReader::new(reader);
+    Ok(Some(parse_whitelist(
+        std::io::BufReader::new(reader),
+        cb_len,
+    )?))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn load_whitelist_opt(path: &Path, cb_len: usize) -> Result<Option<HashSet<Vec<u8>>>> {
+    use std::io::Cursor;
+    let key = path.to_string_lossy();
+    let Some(bytes) = fastq::vfs::get(&key) else {
+        return Ok(None);
+    };
+    let reader: Box<dyn std::io::Read> = if fastq::is_gzip(&bytes) {
+        Box::new(flate2::read::MultiGzDecoder::new(Cursor::new(bytes)))
+    } else {
+        Box::new(Cursor::new(bytes))
+    };
+    Ok(Some(parse_whitelist(
+        std::io::BufReader::new(reader),
+        cb_len,
+    )?))
+}
+
+/// Read one barcode per line, keying on the uppercased first `cb_len` bytes.
+fn parse_whitelist<R: std::io::BufRead>(reader: R, cb_len: usize) -> Result<HashSet<Vec<u8>>> {
+    // 10x onlists run to several million barcodes; preallocate to avoid rehashing.
     let mut set = HashSet::with_capacity(4_000_000);
-    for line in buf.lines() {
+    for line in reader.lines() {
         let line = line?;
         let line = line.trim();
         if line.len() < cb_len {
@@ -934,6 +1172,82 @@ mod tests {
             a.scored[0].0.id
         );
         assert_eq!(a.confidence, "medium");
+    }
+
+    #[test]
+    fn bulk_wgs_reads_are_not_single_cell() {
+        // 100 bp genomic R1, no TSO, no whitelist: must NOT be force-fit to a 10x assay.
+        let r1: Vec<Vec<u8>> = (0..200).map(|_| vec![b'A'; 100]).collect();
+        let r2: Vec<Vec<u8>> = (0..200).map(|_| vec![b'C'; 100]).collect();
+        let a = analyze(&r1, &r2, &HashMap::new(), Some(0));
+        assert!(
+            !a.is_single_cell,
+            "100bp genomic reads should not look single-cell"
+        );
+        let report = build_report(a, false, 200, false);
+        assert_eq!(report.assay_id, "none");
+        assert_eq!(report.assay_display, "Not single-cell");
+        assert_eq!(report.confidence, "low");
+        // The ledger walks all three signals and ends on a clear verdict.
+        assert!(
+            report
+                .interpretation
+                .iter()
+                .any(|e| e.signal == "Barcode geometry"),
+            "reasoning should explain the barcode-geometry check"
+        );
+        assert!(
+            report
+                .interpretation
+                .last()
+                .is_some_and(|e| e.signal == "Verdict" && e.conclusion.contains("not single-cell")),
+            "reasoning should end on a not-single-cell verdict"
+        );
+        assert!(report.notes.iter().any(|n| n.contains("not single-cell")));
+    }
+
+    #[test]
+    fn ambiguous_3p_5p_polarity_is_reported_as_both() {
+        // 26 bp R1 (CB16+UMI10) whose barcodes match the 737K onlist, no TSO. 3'v2 and
+        // 5'v1 share this geometry + onlist, so the polarity must be reported as
+        // unresolved (both names), never a confident single pick.
+        let n = 200;
+        let mut r1 = Vec::new();
+        let mut cbs = HashSet::new();
+        for i in 0..n {
+            let cb = distinct_cb(i);
+            let mut read = cb.clone();
+            read.extend_from_slice(&[b'A'; 10]); // UMI -> 26 bp total
+            r1.push(read);
+            cbs.insert(cb);
+        }
+        let r2: Vec<Vec<u8>> = (0..n).map(|_| vec![b'C'; 90]).collect();
+        let mut wl_sets: HashMap<&'static str, HashSet<Vec<u8>>> = HashMap::new();
+        wl_sets.insert("737K-august-2016.txt.gz", cbs);
+
+        let a = analyze(&r1, &r2, &wl_sets, None);
+        let report = build_report(a, false, n, false);
+        assert!(
+            report.assay_display.contains(" or "),
+            "polarity should be reported as both, got {}",
+            report.assay_display
+        );
+        assert_ne!(
+            report.confidence, "high",
+            "unresolved polarity can't be high"
+        );
+        assert!(report
+            .interpretation
+            .iter()
+            .any(|e| e.signal == "3' vs 5' polarity"));
+    }
+
+    #[test]
+    fn tenx_v3_reads_are_single_cell() {
+        // Guard against the gate over-triggering on genuine single-cell geometry.
+        let (r1, r2, _) = tenx_v3_reads(200, true);
+        let a = analyze(&r1, &r2, &HashMap::new(), Some(180));
+        assert!(a.is_single_cell);
     }
 
     #[test]

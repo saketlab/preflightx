@@ -1,0 +1,22 @@
+# Hostinger (Apache / LiteSpeed) serving rules for the preflightx static site.
+
+# WebAssembly must arrive with the right MIME type or the browser refuses to
+# stream-compile it.
+AddType application/wasm .wasm
+
+# Serve the barcode onlists as raw gzip. Without this the server may tag them
+# Content-Encoding: gzip and the browser would decode them in flight; the wasm
+# reader handles either form, but raw bytes keep the behaviour predictable.
+RemoveType .gz
+AddType application/gzip .gz
+<FilesMatch "\.gz$">
+  Header unset Content-Encoding
+</FilesMatch>
+
+# Long-lived caching for the generated wasm bundle and the onlists (both are
+# content-addressed by the deploy, so a fresh deploy replaces them wholesale).
+<IfModule mod_headers.c>
+  <FilesMatch "\.(wasm|gz)$">
+    Header set Cache-Control "public, max-age=31536000"
+  </FilesMatch>
+</IfModule>

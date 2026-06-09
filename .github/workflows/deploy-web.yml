@@ -1,0 +1,95 @@
+name: deploy-web
+
+# Build the WASM bundle, cache + fetch all 10x onlists, and rsync web/ to Hostinger.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "web/**"
+      - "build.rs"
+      - "Cargo.*"
+      - "scripts/build-wasm.sh"
+      - ".github/workflows/deploy-web.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-web
+  cancel-in-progress: true
+
+env:
+  WASM_BINDGEN_VERSION: "0.2.114"   # keep in sync with the wasm-bindgen crate in Cargo.toml
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo + wasm-bindgen-cli
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: deploy-web-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install wasm-bindgen-cli + binaryen
+        run: |
+          if ! wasm-bindgen --version 2>/dev/null | grep -q "$WASM_BINDGEN_VERSION"; then
+            cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked
+          fi
+          sudo apt-get update && sudo apt-get install -y binaryen
+
+      - name: Build wasm bundle
+        run: ./scripts/build-wasm.sh
+
+      - name: Cache barcode whitelists
+        uses: actions/cache@v4
+        with:
+          path: web/whitelists
+          key: whitelists-${{ hashFiles('src/assay.rs') }}
+          restore-keys: whitelists-
+
+      - name: Fetch all barcode whitelists
+        run: |
+          mkdir -p web/whitelists
+          PREFLIGHTX_CACHE="$PWD/web/whitelists" cargo run --release -- fetch-whitelists
+          ls -lh web/whitelists
+
+      - name: Verify build artifacts
+        run: |
+          test -f web/pkg/preflightx_bg.wasm || { echo "missing wasm bundle"; exit 1; }
+          test -f web/pkg/preflightx.js || { echo "missing wasm JS bindings"; exit 1; }
+          test -f web/index.html || { echo "missing index.html"; exit 1; }
+          test "$(ls web/whitelists/*.txt.gz 2>/dev/null | wc -l)" -ge 1 || { echo "no whitelists"; exit 1; }
+
+      - name: Deploy to Hostinger over SSH
+        env:
+          SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+          SSH_HOST: ${{ secrets.HOSTINGER_HOST }}
+          SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          DEPLOY_PATH: ${{ secrets.HOSTINGER_DEPLOY_PATH || '~/domains/preflightx.saketlab.org/public_html' }}
+        run: |
+          test -n "$DEPLOY_PATH" || { echo "DEPLOY_PATH is empty; refusing to deploy"; exit 1; }
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${SSH_PORT:-22}" "$SSH_HOST" >> ~/.ssh/known_hosts
+          rsync -az --delete-after \
+            -e "ssh -i ~/.ssh/deploy_key -p ${SSH_PORT:-22}" \
+            web/ "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
+
+      - name: Remove deploy key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

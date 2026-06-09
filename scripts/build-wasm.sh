@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Build the preflightx WebAssembly module + JS bindings into web/pkg/.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+TOOLCHAIN="${PREFLIGHTX_WASM_TOOLCHAIN:-stable}"
+OUT_DIR="web/pkg"
+PROFILE="release"
+
+# Resolve the rustup toolchain's bin dir (works even when conda shadows cargo).
+RUSTC_PATH="$(rustup which --toolchain "$TOOLCHAIN" rustc)"
+TC_BIN="$(dirname "$RUSTC_PATH")"
+export RUSTC="$TC_BIN/rustc"
+export PATH="$TC_BIN:$PATH"
+CARGO="$TC_BIN/cargo"
+
+echo ">> toolchain: $("$RUSTC" --version)"
+
+# Ensure the wasm target is present for this toolchain.
+if ! "$RUSTC" --print target-list | grep -qx wasm32-unknown-unknown \
+   || ! ls "$("$RUSTC" --print sysroot)/lib/rustlib/wasm32-unknown-unknown/lib/" >/dev/null 2>&1; then
+  echo ">> installing wasm32-unknown-unknown for $TOOLCHAIN"
+  rustup target add --toolchain "$TOOLCHAIN" wasm32-unknown-unknown
+fi
+
+echo ">> cargo build (wasm, $PROFILE)"
+"$CARGO" build --lib --target wasm32-unknown-unknown --no-default-features --"$PROFILE"
+
+WASM="target/wasm32-unknown-unknown/$PROFILE/preflightx.wasm"
+
+echo ">> wasm-bindgen ($(wasm-bindgen --version))"
+wasm-bindgen --target web --no-typescript --out-dir "$OUT_DIR" "$WASM"
+
+if command -v wasm-opt >/dev/null 2>&1; then
+  echo ">> wasm-opt -Oz"
+  wasm-opt -Oz "$OUT_DIR/preflightx_bg.wasm" -o "$OUT_DIR/preflightx_bg.wasm"
+fi
+
+echo ">> done -> $OUT_DIR/"
+ls -lh "$OUT_DIR"

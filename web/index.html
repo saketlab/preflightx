@@ -1,0 +1,872 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>preflightx: single-cell FASTQ pre-flight, in your browser</title>
+<style>
+  /* Editorial-scientific palette: warm paper (light) and a terminal-adjacent dark
+     variant. Region colours always pair with a text label (never colour alone). */
+  :root {
+    --bg: #f4f1e8; --panel: #fcfbf6; --panel2: #efebdf; --line: #ddd8c8;
+    --fg: #191a26; --muted: #6b6a5f; --paper-on-accent: #fcfbf6;
+    --cb: #3a52c6; --umi: #0c8f6e; --linker: #5b6472; --poly: #e0a124;
+    --insert: #d9480f; --index: #8e44ad; --adapter: #d3ccb9;
+    --accent: var(--cb);
+    --good: #1f7a4d; --warn: #9a6b00; --bad: #c0392b;
+    /* Uniform SF system font; SF Mono for sequence/data so columns still align. */
+    --ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', system-ui, sans-serif;
+    --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16150f; --panel: #1e1d15; --panel2: #25241a; --line: #34322a;
+      --fg: #ece9dd; --muted: #9a978a; --paper-on-accent: #16150f;
+      --cb: #6b80ff; --umi: #2bb98f; --linker: #8b93a3; --poly: #f0bd55;
+      --insert: #ff7a45; --index: #b974d6; --adapter: #6f6a58;
+      --good: #45c98a; --warn: #f0bd55; --bad: #ff7a6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14.5px/1.55 var(--ui);
+    background-image: radial-gradient(var(--line) 0.6px, transparent 0.6px);
+    background-size: 22px 22px;
+  }
+  header { padding: 30px 24px 8px; max-width: 920px; margin: 0 auto; }
+  h1 { margin: 0; font-family: var(--ui); font-weight: 600; font-size: 30px; letter-spacing: -0.01em; }
+  h1 .x { color: var(--accent); }
+  .tag { color: var(--muted); margin-top: 6px; font-size: 13.5px; }
+  .priv { color: var(--good); font-size: 13px; margin-top: 10px; }
+  main { max-width: 920px; margin: 0 auto; padding: 12px 24px 60px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 18px; margin-top: 18px; box-shadow: 0 1px 2px rgba(25,26,38,.05); }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .drop {
+    flex: 1 1 260px; background: var(--panel2); border: 1.5px dashed var(--line);
+    border-radius: 6px; padding: 16px; cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  .drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--panel2)); }
+  .drop .lbl { font-weight: 600; }
+  .drop .file { color: var(--muted); font-size: 13px; margin-top: 6px; word-break: break-all; }
+  .drop input { display: none; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tab {
+    background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer;
+  }
+  .tab.active { background: var(--accent); color: var(--paper-on-accent); border-color: var(--accent); font-weight: 600; }
+  .pane { display: none; }
+  .pane.active { display: block; }
+  textarea {
+    width: 100%; min-height: 150px; background: var(--panel2); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 12px; resize: vertical;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.45;
+  }
+  textarea::placeholder { color: var(--muted); }
+  .ta-lbl { font-weight: 600; margin: 0 0 6px; }
+  .ta-lbl .hint { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 6px; }
+  .acc-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  input[type=text] {
+    flex: 1 1 240px; background: var(--panel2); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px; font: inherit;
+  }
+  table.runs { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13.5px; }
+  table.runs th, table.runs td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.runs th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  table.runs td.acc { font-family: var(--mono); }
+  table.runs td.res { color: var(--muted); }
+  button.run { padding: 5px 12px; font-size: 13px; }
+  .runs-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+  .runs-head .meta { color: var(--muted); font-size: 13px; }
+  tr.detail > td { padding: 0 10px 14px; background: var(--panel2); }
+  tr.detail .why { margin-top: 4px; }
+  .why-toggle {
+    background: none; border: 0; color: var(--accent); font: inherit; font-size: 12px;
+    padding: 2px 4px; margin-left: 6px; cursor: pointer; white-space: nowrap;
+  }
+  .why-toggle::before { content: '\25b8\00a0'; }
+  .why-toggle[aria-expanded="true"]::before { content: '\25be\00a0'; }
+  /* Read-structure track: proportional region blocks (widths ∝ bp), each labelled. */
+  .track-lbl { font-size: 12px; color: var(--muted); margin: 16px 0 5px; }
+  .track { display: flex; gap: 2px; height: 30px; font-family: var(--mono); font-size: 11px; font-weight: 500; }
+  .seg { display: flex; align-items: center; justify-content: center; color: var(--paper-on-accent);
+         border-radius: 3px; overflow: hidden; white-space: nowrap; padding: 0 4px; min-width: 0; }
+  .seg-cb { background: var(--cb); }
+  .seg-umi { background: var(--umi); }
+  .seg-insert { background: var(--insert); }
+  .seg-adapter { background: var(--adapter); color: var(--fg); }
+  .why { margin-top: 16px; }
+  .why h4 { margin: 0 0 8px; font-family: var(--ui); font-size: 15px; color: var(--fg); font-weight: 600; }
+  .why-row { padding: 9px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+  .why-row:first-of-type { border-top: 0; }
+  .why-sig { color: var(--accent); font-weight: 600; }
+  .why-llr { color: var(--muted); font-size: 12px; margin-left: 8px; }
+  .why-obs { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .why-concl { margin-top: 3px; }
+  .why-legend { margin-top: 10px; color: var(--muted); font-size: 12px; font-style: italic; }
+  .why-notes { color: var(--muted); }
+  /* Inline bar charts (pure CSS) that visualise the scoring signals. */
+  .plots { margin-top: 16px; }
+  .plots h4 { margin: 16px 0 6px; font-family: var(--ui); font-size: 13px; color: var(--fg); font-weight: 600; }
+  .bar-row { display: flex; align-items: center; gap: 10px; margin: 3px 0; font-size: 12px; }
+  .bar-label { flex: 0 0 150px; text-align: right; color: var(--muted); font-family: var(--mono);
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar-track { flex: 1; height: 14px; background: var(--panel2); border: 1px solid var(--line);
+               border-radius: 3px; position: relative; }
+  .bar-track.ticked { overflow: visible; }
+  .bar-fill { height: 100%; border-radius: 2px; }
+  .bar-val { flex: 0 0 50px; font-family: var(--mono); }
+  .tick { position: absolute; top: -3px; bottom: -3px; width: 0; border-left: 2px dotted var(--muted); }
+  .tick.exp { border-left-color: var(--insert); }
+  .bar-legend { font-size: 11px; color: var(--muted); margin: 5px 0 0 160px; }
+  @media (max-width: 560px) {
+    .bar-label { flex-basis: 96px; font-size: 11px; }
+    .bar-legend { margin-left: 0; }
+  }
+  .vmain.warn { color: var(--insert); }
+  .controls { display: flex; align-items: center; gap: 14px; margin-top: 16px; flex-wrap: wrap; }
+  label.n { color: var(--muted); font-size: 14px; }
+  input[type=number] {
+    width: 110px; background: var(--panel2); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; font: inherit;
+  }
+  button {
+    background: var(--accent); color: var(--paper-on-accent); border: 0; border-radius: 6px;
+    padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.sec { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  .status { color: var(--muted); font-size: 13px; margin-top: 12px; min-height: 18px; }
+  .status.err { color: var(--bad); }
+  .verdict { display: none; }
+  .verdict.show { display: block; }
+  .vhead { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .vmain { font-family: var(--ui); font-size: 24px; font-weight: 600; margin: 4px 0; }
+  /* Confidence always carries the literal word, so colour is redundant (CVD-safe). */
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+  .pill.high { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
+  .pill.medium { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+  .pill.low { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 14px; }
+  .stat { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 12px; }
+  .stat .k { color: var(--muted); font-size: 12px; }
+  .stat .v { font-size: 17px; font-weight: 600; margin-top: 3px; }
+  details { margin-top: 16px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  pre { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 14px;
+        overflow: auto; font-family: var(--mono); font-size: 12.5px; color: var(--fg); max-height: 460px; }
+  a { color: var(--accent); }
+  footer { max-width: 920px; margin: 0 auto; padding: 0 24px 40px; color: var(--muted); font-size: 13px; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>preflight<span class="x">x</span></h1>
+  <div class="tag">Single-cell FASTQ pre-flight: chemistry.</div>
+  <div class="priv">🔒 No data is stored. Runs in your browser.</div>
+</header>
+
+<main>
+  <div class="card">
+    <div class="tabs">
+      <button class="tab active" id="tabFiles" type="button">Upload files</button>
+      <button class="tab" id="tabPaste" type="button">Paste reads</button>
+      <button class="tab" id="tabAcc" type="button">From accession</button>
+    </div>
+
+    <div class="pane active" id="paneFiles">
+      <div class="row">
+        <div class="drop" id="drop1">
+          <div class="lbl">R1 (barcode read)</div>
+          <div class="file" id="file1">drop a .fastq / .fastq.gz here, or click</div>
+          <input type="file" id="in1" accept=".fastq,.fq,.gz,.fastq.gz,.fq.gz" />
+        </div>
+        <div class="drop" id="drop2">
+          <div class="lbl">R2 (cDNA read)</div>
+          <div class="file" id="file2">drop a .fastq / .fastq.gz here, or click</div>
+          <input type="file" id="in2" accept=".fastq,.fq,.gz,.fastq.gz,.fq.gz" />
+        </div>
+      </div>
+    </div>
+
+    <div class="pane" id="panePaste">
+      <div class="row">
+        <div style="flex: 1 1 260px;">
+          <p class="ta-lbl">R1 (barcode read) <span class="hint">plain-text FASTQ</span></p>
+          <textarea id="ta1" spellcheck="false" placeholder="@read1&#10;ACGT...&#10;+&#10;IIII..."></textarea>
+        </div>
+        <div style="flex: 1 1 260px;">
+          <p class="ta-lbl">R2 (cDNA read) <span class="hint">plain-text FASTQ</span></p>
+          <textarea id="ta2" spellcheck="false" placeholder="@read1&#10;ACGT...&#10;+&#10;IIII..."></textarea>
+        </div>
+      </div>
+    </div>
+
+    <div class="pane" id="paneAcc">
+      <div class="acc-row">
+        <input type="text" id="accInput" spellcheck="false"
+               placeholder="study, project, or run: SRP / ERP / GSE / PRJ / SRR / ERR…" />
+        <button id="btnFetchRuns" type="button">Fetch runs</button>
+      </div>
+      <div class="status" id="accStatus"></div>
+      <div id="runsWrap"></div>
+    </div>
+
+    <div class="controls">
+      <label class="n">reads to sample <input type="number" id="nreads" value="50000" min="1000" step="1000" /></label>
+      <button id="btnCheck" disabled>Run full check</button>
+      <button id="btnAssay" class="sec" disabled>Detect assay</button>
+    </div>
+    <div class="status" id="status">Loading WebAssembly module…</div>
+  </div>
+
+  <div class="card verdict" id="verdict">
+    <div class="vhead" id="vhead">Result</div>
+    <div class="vmain" id="vmain">—</div>
+    <div id="vconf"></div>
+    <div id="vtrack"></div>
+    <div class="grid" id="vgrid"></div>
+    <div class="plots" id="vplots"></div>
+    <div class="why" id="vwhy"></div>
+    <details>
+      <summary>Raw JSON</summary>
+      <pre id="raw"></pre>
+    </details>
+  </div>
+</main>
+
+<footer>
+  Samples the first <em>N</em> reads only. Accessions stream from <a href="https://seqout.org">seqout.org</a> + ENA.
+  &nbsp;·&nbsp; <a href="https://github.com/saketlab/preflightx">source</a>
+</footer>
+
+<script type="module">
+import init, { check, detect_assay, needed_whitelists, load_whitelist } from './pkg/preflightx.js';
+
+// preflightx samples the first N reads, so we only read the leading slice.
+const SLICE_BYTES = 48 * 1024 * 1024;
+
+// Onlists: the host may serve them (CI fetches them into web/whitelists/); otherwise
+// fall back to the public scg_lib_structs mirror. If neither has a file, the fetch
+// fails and chemistry falls back to geometry + TSO.
+const WL_PATH = 'whitelists';
+const WL_MIRROR = 'https://teichlab.github.io/scg_lib_structs/data/10X-Genomics';
+const wlLoaded = new Set();
+
+const els = {
+  in1: document.getElementById('in1'), in2: document.getElementById('in2'),
+  file1: document.getElementById('file1'), file2: document.getElementById('file2'),
+  drop1: document.getElementById('drop1'), drop2: document.getElementById('drop2'),
+  ta1: document.getElementById('ta1'), ta2: document.getElementById('ta2'),
+  tabFiles: document.getElementById('tabFiles'), tabPaste: document.getElementById('tabPaste'),
+  tabAcc: document.getElementById('tabAcc'),
+  paneFiles: document.getElementById('paneFiles'), panePaste: document.getElementById('panePaste'),
+  paneAcc: document.getElementById('paneAcc'),
+  accInput: document.getElementById('accInput'), btnFetchRuns: document.getElementById('btnFetchRuns'),
+  accStatus: document.getElementById('accStatus'), runsWrap: document.getElementById('runsWrap'),
+  controls: document.querySelector('.controls'),
+  nreads: document.getElementById('nreads'),
+  btnCheck: document.getElementById('btnCheck'), btnAssay: document.getElementById('btnAssay'),
+  status: document.getElementById('status'),
+  verdict: document.getElementById('verdict'), vhead: document.getElementById('vhead'),
+  vmain: document.getElementById('vmain'), vconf: document.getElementById('vconf'),
+  vtrack: document.getElementById('vtrack'), vplots: document.getElementById('vplots'),
+  vgrid: document.getElementById('vgrid'), vwhy: document.getElementById('vwhy'),
+  raw: document.getElementById('raw'),
+};
+let f1 = null, f2 = null, ready = false, mode = 'files';
+
+function setStatus(msg, isErr) {
+  els.status.textContent = msg;
+  els.status.classList.toggle('err', !!isErr);
+}
+function haveInputs() {
+  if (mode === 'paste') return els.ta1.value.trim() && els.ta2.value.trim();
+  return f1 && f2;
+}
+function refresh() {
+  const ok = ready && haveInputs();
+  els.btnCheck.disabled = !ok;
+  els.btnAssay.disabled = !ok;
+}
+
+const MODES = [
+  { mode: 'files', tab: els.tabFiles, pane: els.paneFiles },
+  { mode: 'paste', tab: els.tabPaste, pane: els.panePaste },
+  { mode: 'acc', tab: els.tabAcc, pane: els.paneAcc },
+];
+function setMode(next) {
+  mode = next;
+  for (const m of MODES) {
+    m.tab.classList.toggle('active', m.mode === next);
+    m.pane.classList.toggle('active', m.mode === next);
+  }
+  // The accession tab runs each run on its own, so the shared single-pair controls
+  // and verdict don't apply there.
+  const acc = next === 'acc';
+  els.controls.style.display = acc ? 'none' : '';
+  els.status.style.display = acc ? 'none' : '';
+  els.verdict.style.display = acc ? 'none' : '';
+  refresh();
+}
+for (const m of MODES) m.tab.addEventListener('click', () => setMode(m.mode));
+els.ta1.addEventListener('input', refresh);
+els.ta2.addEventListener('input', refresh);
+function wireDrop(drop, input, fileLbl, assign) {
+  drop.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => {
+    if (input.files[0]) { assign(input.files[0]); fileLbl.textContent = input.files[0].name; refresh(); }
+  });
+  ['dragenter', 'dragover'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', ev => {
+    const file = ev.dataTransfer.files[0];
+    if (file) { assign(file); fileLbl.textContent = file.name; refresh(); }
+  });
+}
+wireDrop(els.drop1, els.in1, els.file1, f => f1 = f);
+wireDrop(els.drop2, els.in2, els.file2, f => f2 = f);
+
+async function readHead(file) {
+  const blob = file.size > SLICE_BYTES ? file.slice(0, SLICE_BYTES) : file;
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+const encoder = new TextEncoder();
+async function gatherBytes() {
+  if (mode === 'paste') {
+    return [encoder.encode(els.ta1.value), encoder.encode(els.ta2.value)];
+  }
+  return Promise.all([readHead(f1), readHead(f2)]);
+}
+
+// Fetch the onlist(s) matching the read geometry and hand them to wasm. Try the host
+// first (fast, same-origin when the deploy serves them); fall back to the public
+// scg_lib_structs mirror (CORS-enabled) so it still works when the host has none.
+// All failures are non-fatal: chemistry just stays at medium confidence.
+async function ensureWhitelists(b1, b2, n) {
+  let needed;
+  try {
+    needed = JSON.parse(needed_whitelists(b1, b2, n));
+  } catch {
+    return;
+  }
+  for (const name of needed) {
+    if (wlLoaded.has(name)) continue;
+    for (const url of [`${WL_PATH}/${name}`, `${WL_MIRROR}/${name}`]) {
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) continue;
+        load_whitelist(name, new Uint8Array(await resp.arrayBuffer()));
+        wlLoaded.add(name);
+        break;
+      } catch {
+        // try the next source
+      }
+    }
+  }
+}
+
+function pill(conf) {
+  const c = (conf || 'low').toLowerCase();
+  return `<span class="pill ${c}">${c} confidence</span>`;
+}
+function stat(k, v) { return `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`; }
+
+// Render a "how we got here" ledger: numbered steps (measured → conclusion [+nats]),
+// a legend, and any notes. `steps` is [{signal, observation, conclusion, llr}].
+function renderLedger(el, steps, legend, notes) {
+  if (!steps.length && !(notes && notes.length)) { el.innerHTML = ''; return; }
+  const rows = steps.map((e, i) => {
+    let llr = '';
+    if (e.llr != null) {
+      const v = +e.llr;
+      llr = `<span class="why-llr">${v >= 0 ? '+' : ''}${v.toFixed(0)} nats</span>`;
+    }
+    return `<div class="why-row">
+      <div><span class="why-sig">${i + 1}. ${escapeHtml(e.signal)}</span>${llr}</div>
+      <div class="why-obs">measured: ${escapeHtml(e.observation)}</div>
+      <div class="why-concl">&rarr; ${escapeHtml(e.conclusion)}</div>
+    </div>`;
+  }).join('');
+  const legendHtml = legend ? `<div class="why-legend">${escapeHtml(legend)}</div>` : '';
+  const noteHtml = (notes && notes.length)
+    ? `<div class="why-row why-notes">${notes.map(escapeHtml).join('<br>')}</div>` : '';
+  el.innerHTML = `<h4>How we got here</h4>${rows}${legendHtml}${noteHtml}`;
+}
+
+// Build ledger args straight from a chemistry report's interpretation chain.
+function chemLedger(chem) {
+  const ev = (chem && chem.interpretation) || [];
+  const steps = ev.map(e => ({
+    signal: e.signal, observation: e.observation, conclusion: e.conclusion, llr: e.llr_contribution,
+  }));
+  const legend = ev.some(e => e.llr_contribution != null)
+    ? "Evidence is in nats (log-likelihood): each signal's nats are summed and the highest-scoring assay wins; ~0 means that signal did not discriminate."
+    : '';
+  return { steps, legend, notes: (chem && chem.notes) || [] };
+}
+function renderWhy(el, chem) {
+  const L = chemLedger(chem);
+  renderLedger(el, L.steps, L.legend, L.notes);
+}
+
+// One horizontal bar: label · fill (width = value/max) · value text.
+function bar(label, frac, color, valText) {
+  const w = Math.max(0, Math.min(100, 100 * frac));
+  return `<div class="bar-row"><div class="bar-label">${escapeHtml(label)}</div>` +
+    `<div class="bar-track"><div class="bar-fill" style="width:${w}%;background:${color}"></div></div>` +
+    `<div class="bar-val">${escapeHtml(valText)}</div></div>`;
+}
+
+// Visualise what the sampled reads are made of (base composition, content/quality)
+// and the scoring signals (onlist overlap, TSO level, R1 length spread).
+function renderPlots(el, r) {
+  const chem = r.chemistry || {}, comp = r.composition || {}, size = r.size || {};
+  const r2 = size.r2 || size.r1 || {};
+  let html = '';
+
+  // Base composition: a single stacked bar (A/C/G/T/N) of the cDNA read.
+  if (Array.isArray(comp.base_pct)) {
+    const B = comp.base_pct;
+    const lab = ['A', 'C', 'G', 'T', 'N'];
+    const col = ['var(--umi)', 'var(--cb)', 'var(--poly)', 'var(--insert)', 'var(--linker)'];
+    const cells = lab.map((l, i) => ({ l, pct: B[i], c: col[i] })).filter(s => s.pct > 0.05)
+      .map(s => `<div class="seg" style="flex:${s.pct};background:${s.c}" title="${s.l} ${s.pct.toFixed(1)}%">${s.pct >= 8 ? s.l : ''}</div>`).join('');
+    const legend = lab.map((l, i) => `${l} ${B[i].toFixed(1)}%`).join(' · ');
+    html += `<h4>Base composition (R2 cDNA)</h4><div class="track">${cells}</div>` +
+      `<div class="bar-legend" style="margin-left:0">${legend}</div>`;
+  }
+
+  // Read content / quality bars.
+  const qc = [];
+  if (comp.gc_pct != null) qc.push(['GC content', comp.gc_pct, 'var(--cb)']);
+  if (comp.n_pct != null) qc.push(['N bases', comp.n_pct, 'var(--linker)']);
+  if (comp.low_complexity_pct != null) qc.push(['low-complexity reads', comp.low_complexity_pct, 'var(--poly)']);
+  if (comp.homopolymer_pct != null) qc.push(['homopolymer reads (polyA/T)', comp.homopolymer_pct, 'var(--poly)']);
+  if (r2.low_qual_pct != null) qc.push(['low-quality reads (Q<20)', r2.low_qual_pct, 'var(--insert)']);
+  if (qc.length) {
+    html += `<h4>Read content</h4>` + qc.map(([l, v, c]) => bar(l, v / 100, c, v.toFixed(1) + '%')).join('');
+  }
+  if (r2.mean_phred != null) {
+    const Q = 40;
+    html += `<div class="bar-row"><div class="bar-label">mean quality</div>
+      <div class="bar-track ticked"><div class="bar-fill" style="width:${Math.min(100, 100 * r2.mean_phred / Q)}%;background:var(--umi)"></div>
+      <div class="tick" style="left:${100 * 30 / Q}%" title="Q30"></div></div>
+      <div class="bar-val">Q${r2.mean_phred.toFixed(0)}</div></div>
+      <div class="bar-legend">dotted = Q30 (99.9% base-call accuracy), scale 0–${Q}</div>`;
+  }
+
+  // Scoring signals.
+  const wl = chem.whitelist_scores || [];
+  if (wl.length) {
+    const rows = wl.map((w, i) =>
+      bar(w.filename.replace('.txt.gz', ''), w.pct / 100, i === 0 ? 'var(--cb)' : 'var(--linker)', w.pct.toFixed(0) + '%')).join('');
+    html += `<h4>Barcode → onlist overlap</h4>${rows}`;
+  }
+  const tso = (chem.anchor_scores || [])[0];
+  if (tso != null) {
+    const MAX = 25; // scale so the 1% background and 20% 3' expectation are visible
+    html += `<h4>TSO in R2 (template-switch oligo)</h4>
+      <div class="bar-row">
+        <div class="bar-label">observed</div>
+        <div class="bar-track ticked">
+          <div class="bar-fill" style="width:${Math.min(100, 100 * tso.hit_pct / MAX)}%;background:var(--umi)"></div>
+          <div class="tick" style="left:${100 * 1 / MAX}%" title="background ~1%"></div>
+          <div class="tick exp" style="left:${100 * 20 / MAX}%" title="3' expects ~20%"></div>
+        </div>
+        <div class="bar-val">${tso.hit_pct.toFixed(1)}%</div>
+      </div>
+      <div class="bar-legend">dotted = ~1% background · orange = ~20% a 3' library would show (scale 0–${MAX}%)</div>`;
+  }
+  const dist = chem.r1_length_distribution || [];
+  if (dist.length > 1) {
+    const total = dist.reduce((a, d) => a + d[1], 0) || 1;
+    const rows = dist.map(d =>
+      bar(d[0] + ' bp', d[1] / total, d[0] === chem.r1_length_dominant ? 'var(--cb)' : 'var(--linker)',
+        (100 * d[1] / total).toFixed(0) + '%')).join('');
+    html += `<h4>R1 read-length distribution</h4>${rows}`;
+  }
+  el.innerHTML = html;
+}
+
+// Assay-detector ledger: synthesize the reasoning from the top hit + ranking, since
+// detect_assay scores geometry + linker anchors rather than emitting a chain itself.
+function assaySteps(r) {
+  const hits = r.hits || [];
+  const top = hits[0];
+  if (!top) return [];
+  const delta = Math.abs(top.observed_len - top.expected_len);
+  const lenMatch = delta === 0
+    ? `an exact match to the ${top.name} barcode read`
+    : delta <= 2
+      ? `within tolerance of the ${top.expected_len} bp ${top.name} barcode read`
+      : `a poor match, ${delta} bp off the ${top.expected_len} bp ${top.name} barcode read`;
+  const anchorConcl = top.anchors_total === 0
+    ? 'no fixed linkers are catalogued for this assay, so it matched on geometry alone.'
+    : (top.anchors_found === top.anchors_total
+      ? 'every expected inter-barcode linker is present, a strong structural match.'
+      : 'some expected linkers are missing, only a partial structural match.');
+  const runner = hits[1];
+  const margin = runner ? top.score - runner.score : top.score;
+  return [
+    {
+      signal: 'Read geometry',
+      observation: `barcode read is ${top.observed_len} bp on ${top.orientation}; ${top.name} expects ${top.expected_len} bp`,
+      conclusion: `${top.observed_len} bp is ${lenMatch}.`,
+      llr: null,
+    },
+    {
+      signal: 'Linker anchors',
+      observation: `${top.anchors_found}/${top.anchors_total} fixed linker sequences found at their expected offsets`,
+      conclusion: anchorConcl,
+      llr: null,
+    },
+    {
+      signal: 'Ranking',
+      observation: runner
+        ? `${top.assay_id} scored ${(+top.score).toFixed(0)} nats; next best ${runner.assay_id} at ${(+runner.score).toFixed(0)}`
+        : `${top.assay_id} scored ${(+top.score).toFixed(0)} nats (only candidate)`,
+      conclusion: `Top assay by combined evidence${runner ? `, ${margin.toFixed(0)} nats ahead of the runner-up` : ''}. Confidence ${r.confidence}.`,
+      llr: top.score,
+    },
+  ];
+}
+
+// Draw the barcode read as proportional region blocks (widths ∝ bp). Each block
+// is labelled, so the structure reads without relying on colour (CVD-safe).
+function renderTrack(el, chem) {
+  if (!chem || chem.is_single_cell === false || chem.cb_len == null) { el.innerHTML = ''; return; }
+  const segs = [];
+  if (chem.cb_offset > 0) segs.push({ len: chem.cb_offset, cls: 'adapter', lbl: 'adapter' });
+  segs.push({ len: chem.cb_len, cls: 'cb', lbl: `BC ${chem.cb_len}` });
+  if (chem.umi_len > 0) segs.push({ len: chem.umi_len, cls: 'umi', lbl: `UMI ${chem.umi_len}` });
+  const total = segs.reduce((a, s) => a + s.len, 0) || 1;
+  const blocks = segs.map(s =>
+    `<div class="seg seg-${s.cls}" style="flex:${s.len}" title="${s.len} bp">${escapeHtml(s.lbl)}</div>`).join('');
+  el.innerHTML = `<div class="track-lbl">R1 read structure (${total} bp barcode read)</div><div class="track">${blocks}</div>`;
+}
+
+function renderCheck(r) {
+  const chem = r.chemistry || {};
+  const notSc = chem.is_single_cell === false;
+  els.vhead.textContent = 'Chemistry';
+  els.vmain.textContent = notSc ? 'Not single-cell' : (chem.assay_display || chem.assay_id || 'unknown');
+  els.vmain.classList.toggle('warn', notSc);
+  els.vconf.innerHTML = notSc ? '' : pill(chem.confidence);
+  const g = [];
+  if (!notSc && chem.cb_len != null) g.push(stat('barcode geometry', `CB ${chem.cb_len} + UMI ${chem.umi_len} (${chem.cb_read})`));
+  if (chem.r1_length_dominant != null) g.push(stat('R1 dominant len', chem.r1_length_dominant + ' bp'));
+  if (chem.reads_sampled != null) g.push(stat('reads used', (+chem.reads_sampled).toLocaleString()));
+  if (r.bulk_vs_sc) g.push(stat('library', r.bulk_vs_sc.verdict || '—'));
+  if (r.size && r.size.r1) g.push(stat('mean PHRED', r.size.r1.mean_phred));
+  if (r.composition) g.push(stat('GC %', r.composition.gc_pct));
+  if (r.composition) g.push(stat('organism hint', r.composition.guess_organism_family));
+  if (r.size) g.push(stat('adequate for SC', r.size.adequate_for_sc ? 'yes' : 'no'));
+  els.vgrid.innerHTML = g.join('');
+  renderTrack(els.vtrack, chem);
+  renderPlots(els.vplots, r);
+  renderWhy(els.vwhy, chem);
+}
+function renderAssay(r) {
+  const top = (r.hits && r.hits[0]) || {};
+  els.vhead.textContent = 'Top assay (seqspec catalogue)';
+  els.vmain.textContent = top.name || top.assay_id || top.spec_file || 'no match';
+  els.vmain.classList.remove('warn');
+  els.vconf.innerHTML = pill(r.confidence);
+  const g = [];
+  g.push(stat('reads sampled', r.reads_sampled));
+  if (top.orientation) g.push(stat('orientation', top.orientation));
+  if (top.expected_len != null) g.push(stat('expected len', top.expected_len));
+  if (top.observed_len != null) g.push(stat('observed len', top.observed_len));
+  if (top.anchors_total != null) g.push(stat('anchors', `${top.anchors_found}/${top.anchors_total}`));
+  els.vgrid.innerHTML = g.join('');
+  els.vtrack.innerHTML = '';
+  els.vplots.innerHTML = '';
+  const legend = 'Every catalogued seqspec assay is scored by read-geometry match plus fixed linker anchors, tried in both R1/R2 orientations; the highest summed log-likelihood (nats) wins.';
+  // When the best score is negative or confidence is low, the "winner" is just the
+  // least-bad fit; say so rather than implying a real match.
+  const weak = (r.confidence === 'low') || ((r.hits[0]?.score ?? 0) < 0);
+  const notes = weak
+    ? ['This is only the best of the catalogued assays, not a confident match. Treat it as a hint; the reads may not be single-cell.']
+    : [];
+  renderLedger(els.vwhy, assaySteps(r), legend, notes);
+}
+
+async function run(kind) {
+  els.btnCheck.disabled = els.btnAssay.disabled = true;
+  els.verdict.classList.remove('show');
+  try {
+    setStatus(mode === 'paste' ? 'reading pasted reads…' : 'reading files…');
+    const [b1, b2] = await gatherBytes();
+    const n = Math.max(1000, parseInt(els.nreads.value, 10) || 50000);
+    if (kind === 'check') {
+      setStatus('fetching 10x whitelist…');
+      await ensureWhitelists(b1, b2, n);
+    }
+    setStatus(`analyzing first ${n.toLocaleString()} reads…`);
+    // Yield so the status paints before the synchronous wasm call.
+    await new Promise(r => setTimeout(r, 0));
+    const json = kind === 'check' ? check(b1, b2, n) : detect_assay(b1, b2, n);
+    const r = JSON.parse(json);
+    els.raw.textContent = JSON.stringify(r, null, 2);
+    (kind === 'check' ? renderCheck : renderAssay)(r);
+    els.verdict.classList.add('show');
+    setStatus('done.');
+  } catch (e) {
+    setStatus('error: ' + (e && e.message ? e.message : e), true);
+  } finally {
+    refresh();
+  }
+}
+els.btnCheck.addEventListener('click', () => run('check'));
+els.btnAssay.addEventListener('click', () => run('assay'));
+
+// ---- "From accession" tab: pull runs from seqout.org and check them ----------
+
+const SEQOUT_API = 'https://seqout.org/api';
+// Per-run we fetch only the leading bytes over an HTTP Range request. ENA's https
+// host honours Range + CORS, so this is enough for the first ~50k reads.
+const REMOTE_SLICE = 12 * 1024 * 1024;
+
+const STUDY_RE = /^[SED]RP\d+$/, GSE_RE = /^GSE\d+$/, RUN_RE = /^[SED]RR\d+$/;
+const PRJ_RE = /^PRJ[A-Z]+\d+$/, SAMPEXP_RE = /^(GSM|[SED]RS|[SED]RX)\d+$/;
+
+function accStatus(msg, isErr) {
+  els.accStatus.textContent = msg;
+  els.accStatus.classList.toggle('err', !!isErr);
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+async function apiJson(path) {
+  const r = await fetch(SEQOUT_API + path);
+  if (!r.ok) throw new Error(`seqout API ${r.status} for ${path}`);
+  return r.json();
+}
+
+// `/runs` only accepts SRP/ERP/DRP, so map GSE / PRJ / sample-or-experiment
+// accessions to their parent study first.
+async function resolveStudy(acc) {
+  const A = acc.trim().toUpperCase();
+  if (STUDY_RE.test(A)) return A;
+  if (GSE_RE.test(A)) {
+    const p = await apiJson(`/project/${A}`);
+    // Read the documented cross-reference fields rather than grepping the whole
+    // blob (which could match an unrelated study mentioned in free text).
+    const s = firstStudy(p.alias) || firstStudy(p.relation) || firstStudy(p.external_id);
+    if (s) return s;
+    throw new Error(`no SRA study linked to ${A}`);
+  }
+  if (PRJ_RE.test(A) || SAMPEXP_RE.test(A)) {
+    const path = PRJ_RE.test(A) ? `/prj/${A}` : `/accession/${A}/project`;
+    const pa = ((await apiJson(path)).project_accession || '').toUpperCase();
+    if (STUDY_RE.test(pa)) return pa;
+    if (GSE_RE.test(pa)) return resolveStudy(pa);
+    throw new Error(`could not resolve ${A} to a study`);
+  }
+  throw new Error(`unsupported accession: ${A} (try SRP/ERP/DRP/GSE/PRJ)`);
+}
+// Find the first SRP/ERP/DRP token in a field that may be a string, an array of
+// strings, or absent.
+function firstStudy(field) {
+  if (field == null) return null;
+  const items = Array.isArray(field) ? field : [field];
+  for (const v of items) {
+    const m = String(v).toUpperCase().match(/[SED]RP\d+/);
+    if (m) return m[0];
+  }
+  return null;
+}
+
+// fastq_ftp is a ";"-separated list of host/paths (R1 then R2). Prefix https and
+// pick the barcode/cDNA pair; preflightx auto-orients, so order is best-effort.
+function pickPair(fastqFtp) {
+  let urls = (fastqFtp || '').split(';').map(s => s.trim()).filter(Boolean)
+    .map(p => p.startsWith('http') ? p : 'https://' + p);
+  // Drop sample-index reads (I1/I2): short, not barcode or cDNA. A 10x run is often
+  // listed as I1;R1;R2, and the index would otherwise be mistaken for R1.
+  const noIndex = urls.filter(u => !/_I[12][._]/i.test(u));
+  if (noIndex.length >= 2) urls = noIndex;
+  if (urls.length < 2) return null;
+  const r1 = urls.find(u => /_1\.|_R1[._]/i.test(u)) || urls[0];
+  const r2 = urls.find(u => u !== r1 && /_2\.|_R2[._]/i.test(u)) || urls.find(u => u !== r1);
+  return r2 ? [r1, r2] : null;
+}
+
+async function fetchSlice(url) {
+  const resp = await fetch(url, { headers: { Range: `bytes=0-${REMOTE_SLICE - 1}` } });
+  // Require a partial response. A 200 means the server ignored Range and would
+  // stream the entire (multi-GB) file into memory; refuse that.
+  if (resp.status !== 206) {
+    throw new Error(`server ignored Range (HTTP ${resp.status}); refusing full download`);
+  }
+  return new Uint8Array(await resp.arrayBuffer());
+}
+
+async function runOne(ctx) {
+  if (!ctx.pair) return;
+  const n = Math.max(1000, parseInt(els.nreads.value, 10) || 50000);
+  ctx.btn.disabled = true;
+  ctx.resCell.classList.remove('err');
+  ctx.resCell.textContent = 'fetching…';
+  ctx.detailTr.hidden = true;
+  ctx.why.innerHTML = '';
+  try {
+    const [b1, b2] = await Promise.all([fetchSlice(ctx.pair[0]), fetchSlice(ctx.pair[1])]);
+    ctx.resCell.textContent = 'analyzing…';
+    await ensureWhitelists(b1, b2, n);
+    await new Promise(r => setTimeout(r, 0));
+    const r = JSON.parse(check(b1, b2, n));
+    const c = r.chemistry || {};
+    // Show how many reads informed the call. Flag a short sample only when it was a
+    // truncated fetch, not when the detector stopped early on its own (early_stop).
+    const truncated = c.reads_sampled < n && !c.early_stop;
+    const reads = `<span style="color:var(--muted)"> · ${c.reads_sampled.toLocaleString()} reads${truncated ? ' (input ended early)' : ''}</span>`;
+    if (c.is_single_cell === false) {
+      ctx.resCell.innerHTML =
+        `<span style="color:var(--warn);font-weight:650">Not single-cell</span> ` +
+        `<span style="color:var(--muted)">R1 ${c.r1_length_dominant}bp, no barcode geometry</span>${reads}`;
+    } else {
+      const geom = c.cb_len != null
+        ? ` <span style="color:var(--muted)">CB${c.cb_len}+UMI${c.umi_len}</span>` : '';
+      ctx.resCell.innerHTML = `${escapeHtml(c.assay_display || c.assay_id || 'unknown')} ${pill(c.confidence)}${geom}${reads}`;
+    }
+    // Render the full visual breakdown (read structure + plots + reasoning) into the
+    // hidden detail row, and add a toggle to open it.
+    ctx.why.replaceChildren();
+    const trackDiv = document.createElement('div'); ctx.why.append(trackDiv); renderTrack(trackDiv, c);
+    const plotsDiv = document.createElement('div'); plotsDiv.className = 'plots'; ctx.why.append(plotsDiv); renderPlots(plotsDiv, r);
+    const whyDiv = document.createElement('div'); ctx.why.append(whyDiv);
+    const L = chemLedger(c);
+    renderLedger(whyDiv, L.steps, L.legend, L.notes);
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'why-toggle';
+    toggle.textContent = 'details & plots';
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.addEventListener('click', () => {
+      const open = ctx.detailTr.hidden;
+      ctx.detailTr.hidden = !open;
+      toggle.setAttribute('aria-expanded', String(open));
+    });
+    ctx.resCell.append(toggle);
+    // For a single run (e.g. a run-ID query) show the plots straight away.
+    if (ctx.soleRun) {
+      ctx.detailTr.hidden = false;
+      toggle.setAttribute('aria-expanded', 'true');
+    }
+  } catch (e) {
+    ctx.resCell.classList.add('err');
+    ctx.resCell.textContent = 'error: ' + (e && e.message ? e.message : e);
+  } finally {
+    ctx.btn.disabled = false;
+  }
+}
+
+function renderRunsTable(study, data, runs) {
+  const head = document.createElement('div');
+  head.className = 'runs-head';
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = `${study} · ${data.paired_runs} paired / ${data.single_runs} single`;
+  const runAll = document.createElement('button');
+  runAll.textContent = 'Run all';
+  head.append(meta, runAll);
+
+  const table = document.createElement('table');
+  table.className = 'runs';
+  table.innerHTML = '<thead><tr><th>run</th><th>layout</th><th>FASTQ</th><th></th><th>result</th></tr></thead>';
+  const tb = document.createElement('tbody');
+  const ctxs = [];
+  for (const run of runs) {
+    const pair = pickPair(run.fastq_ftp);
+    const tr = document.createElement('tr');
+    const tdAcc = document.createElement('td'); tdAcc.className = 'acc'; tdAcc.textContent = run.run_accession;
+    const tdLay = document.createElement('td'); tdLay.textContent = (run.library_layout || '—').toLowerCase();
+    const tdFiles = document.createElement('td');
+    tdFiles.style.cssText = 'font-size:12px;color:var(--muted)';
+    tdFiles.textContent = pair ? pair.map(u => u.split('/').pop()).join('  +  ') : 'no paired FASTQ';
+    const tdBtn = document.createElement('td');
+    const btn = document.createElement('button'); btn.className = 'run sec'; btn.textContent = 'Run';
+    const tdRes = document.createElement('td'); tdRes.className = 'res';
+    if (!pair) { btn.disabled = true; tdRes.textContent = 'single-end'; }
+    tdBtn.append(btn);
+    tr.append(tdAcc, tdLay, tdFiles, tdBtn, tdRes);
+    // Hidden detail row holding the per-run reasoning ledger; toggled open by a
+    // button added to the result cell once the run completes.
+    const detailTr = document.createElement('tr'); detailTr.className = 'detail'; detailTr.hidden = true;
+    const detailTd = document.createElement('td'); detailTd.colSpan = 5;
+    const why = document.createElement('div'); why.className = 'why';
+    detailTd.append(why); detailTr.append(detailTd);
+    tb.append(tr, detailTr);
+    const ctx = { run, pair, btn, resCell: tdRes, detailTr, why, soleRun: runs.length === 1 };
+    ctxs.push(ctx);
+    btn.addEventListener('click', () => runOne(ctx));
+  }
+  table.append(tb);
+  els.runsWrap.replaceChildren(head, table);
+
+  runAll.addEventListener('click', async () => {
+    runAll.disabled = true;
+    // Sequential on purpose: each run streams MBs from ENA and holds a slice plus
+    // the onlist in wasm memory, so we don't fan out and spike memory/bandwidth.
+    for (const ctx of ctxs) {
+      if (ctx.pair) await runOne(ctx);
+    }
+    runAll.disabled = false;
+  });
+}
+
+async function fetchRuns() {
+  const raw = els.accInput.value.trim();
+  if (!raw) return;
+  els.btnFetchRuns.disabled = true;
+  els.runsWrap.replaceChildren();
+  try {
+    // A run accession (SRR/ERR/DRR) is checked on its own; anything else resolves
+    // to a study and lists its runs.
+    if (RUN_RE.test(raw.toUpperCase())) {
+      accStatus(`fetching ${raw.toUpperCase()}…`);
+      const run = await apiJson(`/run/${raw.toUpperCase()}`);
+      const paired = (run.library_layout || '').toUpperCase() === 'PAIRED';
+      const data = { total_runs: 1, paired_runs: paired ? 1 : 0, single_runs: paired ? 0 : 1 };
+      renderRunsTable(run.study_accession || run.run_accession, data, [run]);
+      accStatus(`run ${run.run_accession}${run.study_accession ? ` (study ${run.study_accession})` : ''}`);
+      return;
+    }
+    accStatus(`resolving ${raw}…`);
+    const study = await resolveStudy(raw);
+    accStatus(`fetching runs for ${study}…`);
+    const data = await apiJson(`/project/${study}/runs`);
+    const runs = data.runs || [];
+    if (!runs.length) { accStatus(`no runs found for ${study}`, true); return; }
+    renderRunsTable(study, data, runs);
+    const shown = runs.length < data.total_runs ? ` (showing first ${runs.length})` : '';
+    accStatus(`${data.total_runs} run(s) in ${study}${shown}`);
+  } catch (e) {
+    accStatus('error: ' + (e && e.message ? e.message : e), true);
+  } finally {
+    els.btnFetchRuns.disabled = false;
+  }
+}
+els.btnFetchRuns.addEventListener('click', fetchRuns);
+els.accInput.addEventListener('keydown', e => { if (e.key === 'Enter') fetchRuns(); });
+
+(async () => {
+  try {
+    await init();
+    ready = true;
+    setStatus('ready. Drop or paste an R1/R2 FASTQ pair to begin.');
+    refresh();
+  } catch (e) {
+    setStatus('failed to load wasm module: ' + e, true);
+  }
+})();
+</script>
+</body>
+</html>

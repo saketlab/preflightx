@@ -10,6 +10,8 @@ use crate::libstruct;
 pub struct CompositionReport {
     pub gc_pct: f64,
     pub n_pct: f64,
+    /// Overall base composition as percentages, ordered [A, C, G, T, N].
+    pub base_pct: [f64; 5],
     pub low_complexity_pct: f64, // % reads with single base dominating >= 80%
     pub homopolymer_pct: f64,    // % reads containing a >= 20-base homopolymer
     pub guess_organism_family: &'static str,
@@ -35,6 +37,7 @@ pub fn composition(path: &Path, n: usize) -> Result<CompositionReport> {
     let mut homopoly = 0u64;
     let mut total_reads = 0u64;
     let mut len_sq_sum = 0u64;
+    let mut base_totals = [0u64; 5]; // A, C, G, T, N
 
     fastq::for_each_record(path, n, |seq, _| {
         total_reads += 1;
@@ -73,6 +76,9 @@ pub fn composition(path: &Path, n: usize) -> Result<CompositionReport> {
             }
             prev = b_upper;
         }
+        for k in 0..5 {
+            base_totals[k] += counts[k];
+        }
         let len = seq.len() as u64;
         if len > 0 {
             let dom: u64 = counts.iter().take(4).copied().max().unwrap_or(0);
@@ -87,6 +93,13 @@ pub fn composition(path: &Path, n: usize) -> Result<CompositionReport> {
 
     let gc_pct = pct(gc, total_bases);
     let n_pct = pct(n_bases, total_bases);
+    let base_pct = [
+        pct(base_totals[0], total_bases),
+        pct(base_totals[1], total_bases),
+        pct(base_totals[2], total_bases),
+        pct(base_totals[3], total_bases),
+        pct(base_totals[4], total_bases),
+    ];
     let lc_pct = pct(low_complex, total_reads);
     let hp_pct = pct(homopoly, total_reads);
 
@@ -152,6 +165,7 @@ pub fn composition(path: &Path, n: usize) -> Result<CompositionReport> {
     Ok(CompositionReport {
         gc_pct: fastq::round2(gc_pct),
         n_pct: fastq::round2(n_pct),
+        base_pct: base_pct.map(fastq::round2),
         low_complexity_pct: fastq::round2(lc_pct),
         homopolymer_pct: fastq::round2(hp_pct),
         guess_organism_family: guess,
