@@ -9,3 +9,6 @@ web/pkg/
 
 # 10x barcode onlists fetched at deploy time (licensed, never committed)
 web/whitelists/
+
+# Deployment config (server-specific, kept local)
+deploy/

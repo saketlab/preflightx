@@ -80,7 +80,7 @@ jobs:
           SSH_HOST: ${{ secrets.HOSTINGER_HOST }}
           SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
-          DEPLOY_PATH: ${{ secrets.HOSTINGER_DEPLOY_PATH || '~/domains/preflightx.saketlab.org/public_html' }}
+          DEPLOY_PATH: ${{ secrets.HOSTINGER_DEPLOY_PATH || '/var/www/preflightx' }}
         run: |
           test -n "$DEPLOY_PATH" || { echo "DEPLOY_PATH is empty; refusing to deploy"; exit 1; }
           mkdir -p ~/.ssh
