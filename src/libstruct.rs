@@ -584,11 +584,12 @@ mod tests {
         eprintln!("wrote {path}");
     }
 
-    /// Regenerate `docs/assay-structures.html` — a colour-coded visual of every
-    /// assay's barcode-read structure. Run on demand:
+    /// Regenerate `web/assay-structures.html` — a colour-coded visual of every
+    /// assay's barcode-read structure (also deployed at preflightx.saketlab.org).
+    /// Run on demand:
     ///   cargo test gen_assay_html -- --ignored
     #[test]
-    #[ignore = "doc generator; run explicitly to refresh docs/assay-structures.html"]
+    #[ignore = "doc generator; run explicitly to refresh web/assay-structures.html"]
     fn gen_assay_html() {
         // Map a free-text region_type to one of the legend categories.
         fn category(rt: &str) -> &'static str {
@@ -807,86 +808,88 @@ mod tests {
             })
             .collect();
 
-        // Clean, Apple-HIG-inspired styling: plain system sans (Arial), generous
-        // whitespace, hairline separators, restrained colour used only to encode region
-        // type. No webfonts, no texture — self-contained and offline.
+        // Palette/fonts mirror web/index.html; self-contained, light + dark.
         let css = r#"
 *{box-sizing:border-box}
 :root{
-  --bg:#ffffff; --panel:#ffffff; --ink:#1d1d1f; --muted:#6e6e73; --faint:#86868b;
-  --hair:#d2d2d7; --hair2:#e8e8ed; --tint:#f5f5f7;
-  --cb:#0071e3; --umi:#34a853; --linker:#8e8e93; --insert:#ff6a00;
-  --poly:#f5a623; --index:#a64ddb; --adapter:#c7c7cc;
-}
-html{scroll-behavior:smooth;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-body{margin:0;color:var(--ink);background:var(--bg);
-  font-family:Arial,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif;
-  font-size:15px;line-height:1.5}
-.wrap{max-width:1000px;margin:0 auto;padding:72px 24px 110px}
-.title{font-weight:700;font-size:clamp(32px,5.5vw,52px);line-height:1.05;
-  letter-spacing:-.022em;margin:0 0 16px}
+  --bg:#f4f1e8; --panel:#fcfbf6; --panel2:#efebdf; --ink:#191a26; --muted:#6b6a5f; --faint:#6b6a5f;
+  --hair:#ddd8c8; --hair2:#e6e1d2;
+  --cb:#3a52c6; --umi:#0a7d5f; --linker:#5b6472; --insert:#c4420e;
+  --poly:#e0a124; --index:#8e44ad; --adapter:#d3ccb9;
+  --on-accent:#fcfbf6; --shadow:0 1px 2px rgba(25,26,38,.05);
+  --ui:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display',system-ui,sans-serif;
+  --mono:ui-monospace,'SF Mono',SFMono-Regular,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#16150f; --panel:#1e1d15; --panel2:#25241a; --ink:#ece9dd; --muted:#9a978a; --faint:#8f8b7d;
+  --hair:#34322a; --hair2:#2b2a22;
+  --cb:#6b80ff; --umi:#2bb98f; --linker:#8b93a3; --insert:#ff7a45;
+  --poly:#f0bd55; --index:#b974d6; --adapter:#6a6553;
+  --on-accent:#16150f; --shadow:0 1px 2px rgba(0,0,0,.35)}}
+html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body{margin:0;color:var(--ink);background:var(--bg);font-family:var(--ui);font-size:15px;line-height:1.5}
+.wrap{max-width:1000px;margin:0 auto;padding:64px 24px 96px}
+.title{font-weight:600;font-size:clamp(30px,5vw,46px);line-height:1.06;letter-spacing:-.02em;margin:0 0 16px}
 .title em{font-style:normal;color:var(--cb)}
-.lede{max-width:68ch;color:var(--muted);font-size:16px;line-height:1.6;margin:0 0 34px}
-.lede a{color:var(--cb);text-decoration:none}
-.lede a:hover{text-decoration:underline}
-.legend{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:14px 18px;margin:0 0 44px;
-  background:rgba(255,255,255,.72);backdrop-filter:saturate(180%) blur(20px);
-  border:1px solid var(--hair);border-radius:14px;position:sticky;top:12px;z-index:5}
-.legend b{font-weight:600;margin-right:4px;font-size:13px;color:var(--faint);
+.lede{max-width:68ch;color:var(--muted);font-size:15px;line-height:1.6;margin:0 0 34px}
+.lede a{color:var(--cb)}
+.legend{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:12px 16px;margin:0 0 40px;
+  background:var(--panel);border:1px solid var(--hair);border-radius:8px;position:sticky;top:12px;z-index:5}
+.legend b{font-weight:600;margin-right:4px;font-size:12px;color:var(--muted);
   text-transform:uppercase;letter-spacing:.06em}
 .key{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--ink)}
-.sw{width:14px;height:14px;border-radius:4px}
-.card{background:var(--panel);border:1px solid var(--hair2);border-radius:18px;
-  padding:20px 24px;margin:0 0 16px;box-shadow:0 1px 2px rgba(0,0,0,.04);
-  opacity:0;transform:translateY(8px);animation:rise .45s ease forwards}
+.sw{width:14px;height:14px;border-radius:3px}
+.card{background:var(--panel);border:1px solid var(--hair);border-radius:8px;
+  padding:18px 22px;margin:0 0 14px;box-shadow:var(--shadow);
+  opacity:0;transform:translateY(8px);animation:rise .4s ease forwards}
 @keyframes rise{to{opacity:1;transform:none}}
-.card.plate-card{border-style:dashed;border-color:var(--hair);background:var(--tint)}
+.card.plate-card{border-style:dashed;background:var(--panel2)}
 .card.plate-card .cap{color:var(--faint)}
 .card header{display:flex;justify-content:space-between;align-items:baseline;
   gap:14px;flex-wrap:wrap;margin-bottom:16px}
-.card h2{font-weight:600;font-size:19px;margin:0;letter-spacing:-.01em}
+.card h2{font-weight:600;font-size:18px;margin:0;letter-spacing:-.01em}
 .meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .mod{font-size:11px;letter-spacing:.02em;color:var(--muted);
-  background:var(--tint);border-radius:999px;padding:2px 10px}
-.meta code{font-size:12px;color:var(--faint);font-family:ui-monospace,Menlo,Consolas,monospace}
+  background:var(--panel2);border-radius:999px;padding:2px 10px}
+.meta code{font-size:12px;color:var(--muted);font-family:var(--mono)}
 .doi{font-size:11px;color:var(--cb);text-decoration:none;font-weight:600;
-  border:1px solid var(--hair);border-radius:999px;padding:1px 9px}
-.doi:hover{background:var(--cb);color:#fff;border-color:var(--cb)}
+  border:1px solid var(--hair);border-radius:999px;padding:4px 10px;
+  display:inline-flex;align-items:center;min-height:24px}
+.doi:hover{background:var(--cb);color:var(--on-accent);border-color:var(--cb)}
 .reads{display:flex;flex-direction:column;gap:10px}
 .readrow{display:grid;grid-template-columns:124px 1fr;align-items:center;gap:16px}
 .rlabel{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:12px;color:var(--muted);
   font-weight:600;word-break:break-all}
 .readrow.is-bc .rlabel{color:var(--ink)}
-.bcflag{font-size:10px;letter-spacing:.01em;color:#fff;
+.bcflag{font-size:10px;letter-spacing:.01em;color:var(--on-accent);
   background:var(--cb);border-radius:999px;padding:1px 8px;font-weight:600}
 .rmod{font-size:10px;letter-spacing:.02em;color:var(--muted);
-  background:var(--tint);border-radius:999px;padding:1px 8px}
-.rbp{font-size:11px;color:var(--faint);font-weight:500}
+  background:var(--panel2);border-radius:999px;padding:1px 8px}
+.rbp{font-size:11px;color:var(--muted);font-weight:500}
 .readline{display:flex;align-items:center;gap:12px;min-width:0}
-.end{color:var(--faint);font-size:12px;font-weight:600}
+.end{color:var(--muted);font-size:12px;font-weight:600}
 .track{display:flex;align-items:stretch;gap:3px;flex:1;overflow-x:auto;padding:1px 0}
-.seg{flex:0 0 auto;min-height:30px;border-radius:7px;display:flex;flex-direction:row;
-  align-items:center;justify-content:center;gap:5px;color:#fff;position:relative;padding:0 8px;
-  transition:transform .15s ease, box-shadow .15s ease;cursor:default}
-.seg:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.14);z-index:2}
+.seg{flex:0 0 auto;min-height:30px;border-radius:4px;display:flex;flex-direction:row;
+  align-items:center;justify-content:center;gap:5px;color:var(--on-accent);position:relative;padding:0 8px;cursor:default}
 .seg b{font-weight:600;font-size:11px;letter-spacing:.01em}
 .seg i{font-style:normal;font-size:10px;opacity:.85}
 .seg.cb{background:var(--cb)} .seg.umi{background:var(--umi)}
 .seg.insert{background:var(--insert)} .seg.index{background:var(--index)}
 .seg.poly{background:var(--poly);color:#3a2c00} .seg.poly i{opacity:.7}
 .seg.linker{background:var(--linker)} .seg.linker i{opacity:.8}
-.seg.adapter{background:var(--adapter);color:#3a3a3c} .seg.adapter i{opacity:.7}
+.seg.adapter{background:var(--adapter);color:var(--ink)} .seg.adapter i{opacity:.7}
 .seg.tail{flex:0 0 auto;padding:0 14px;min-width:74px;color:var(--insert);font-weight:600;font-size:11px;
   background:transparent;border:1.5px dashed var(--insert)}
 .cap{margin-top:14px;font-size:12px;color:var(--muted)}
 .cap strong{color:var(--ink);font-weight:600}
 .section{font-size:12px;letter-spacing:.06em;text-transform:uppercase;font-weight:600;
-  color:var(--faint);margin:52px 0 18px;border-top:1px solid var(--hair2);padding-top:24px}
+  color:var(--muted);margin:48px 0 18px;border-top:1px solid var(--hair);padding-top:24px}
 .plate{display:flex;flex-wrap:wrap;gap:8px}
-.plate span{font-size:13px;color:var(--muted);background:var(--tint);border:1px solid var(--hair2);
-  border-radius:8px;padding:6px 12px}
-.foot{margin-top:60px;color:var(--faint);font-size:12px;line-height:1.7;
-  border-top:1px solid var(--hair2);padding-top:20px}
+.plate span{font-size:13px;color:var(--muted);background:var(--panel2);border:1px solid var(--hair);
+  border-radius:6px;padding:6px 12px}
+.foot{margin-top:56px;color:var(--muted);font-size:12px;line-height:1.7;
+  border-top:1px solid var(--hair);padding-top:20px}
+@media (max-width:480px){.readrow{grid-template-columns:1fr;gap:6px}.wrap{padding:48px 16px 72px}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 "#;
 
         let legend = [
@@ -910,9 +913,6 @@ body{margin:0;color:var(--ink);background:var(--bg);
         h.push_str("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">");
         h.push_str("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
         h.push_str("<title>preflightx · single-cell read structures</title>");
-        // No webfonts / CDN: the doc is fully self-contained and renders offline, in
-        // keeping with preflightx's zero-network default. The CSS font stacks fall back
-        // to system serif/mono (Georgia, system monospace).
         h.push_str(&format!(
             "<style>{css}</style></head><body><div class=\"wrap\">"
         ));
@@ -940,7 +940,7 @@ body{margin:0;color:var(--ink);background:var(--bg);
             ));
         }
 
-        h.push_str("<div class=\"section\">Plate-based: no in-read cell barcode</div>");
+        h.push_str("<h2 class=\"section\">Plate-based: no in-read cell barcode</h2>");
         for (i, c) in plate_cards.iter().enumerate() {
             let delay = (i.min(12) * 40) as u32;
             h.push_str(&c.replacen(
@@ -965,8 +965,7 @@ body{margin:0;color:var(--ink);background:var(--bg);
         );
         h.push_str("</div></body></html>");
 
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/docs/assay-structures.html");
-        std::fs::create_dir_all(concat!(env!("CARGO_MANIFEST_DIR"), "/docs")).unwrap();
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/web/assay-structures.html");
         std::fs::write(path, h).unwrap();
         eprintln!("wrote {path}");
     }

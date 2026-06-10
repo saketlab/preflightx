@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>preflightx: single-cell FASTQ pre-flight, in your browser</title>
-<meta name="description" content="Detect 10x chemistry and single-cell assay geometry from FASTQ read pairs by sampling the first 50,000 reads. Runs entirely in your browser; nothing is uploaded." />
+<meta name="description" content="Detect single-cell chemistry and assay geometry from FASTQ read pairs. Runs entirely in your browser." />
 <link rel="canonical" href="https://preflightx.saketlab.org/" />
 <meta name="author" content="Saket Choudhary (saketlab.org)" />
 <meta name="theme-color" content="#f4f1e8" media="(prefers-color-scheme: light)" />
@@ -15,7 +15,7 @@
 <meta property="og:site_name" content="preflightx" />
 <meta property="og:url" content="https://preflightx.saketlab.org/" />
 <meta property="og:title" content="preflightx: single-cell FASTQ pre-flight in your browser" />
-<meta property="og:description" content="Detect 10x chemistry and single-cell assay geometry from FASTQ read pairs by sampling the first 50,000 reads. Nothing is uploaded." />
+<meta property="og:description" content="Detect single-cell chemistry and assay geometry from FASTQ read pairs. Runs entirely in your browser." />
 <meta property="og:image" content="https://preflightx.saketlab.org/og.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
@@ -25,19 +25,17 @@
 <meta name="twitter:site" content="@saketkc" />
 <meta name="twitter:creator" content="@saketkc" />
 <meta name="twitter:title" content="preflightx: single-cell FASTQ pre-flight in your browser" />
-<meta name="twitter:description" content="Detect 10x chemistry and single-cell assay geometry from FASTQ read pairs by sampling the first 50,000 reads. Nothing is uploaded." />
+<meta name="twitter:description" content="Detect single-cell chemistry and assay geometry from FASTQ read pairs. Runs entirely in your browser." />
 <meta name="twitter:image" content="https://preflightx.saketlab.org/og.png" />
 <style>
-  /* Editorial-scientific palette: warm paper (light) and a terminal-adjacent dark
-     variant. Region colours always pair with a text label (never colour alone). */
   :root {
     --bg: #f4f1e8; --panel: #fcfbf6; --panel2: #efebdf; --line: #ddd8c8;
     --fg: #191a26; --muted: #6b6a5f; --paper-on-accent: #fcfbf6;
-    --cb: #3a52c6; --umi: #0c8f6e; --linker: #5b6472; --poly: #e0a124;
-    --insert: #d9480f; --index: #8e44ad; --adapter: #d3ccb9;
+    --cb: #3a52c6; --umi: #0a7d5f; --linker: #5b6472; --poly: #e0a124;
+    --insert: #c4420e; --index: #8e44ad; --adapter: #d3ccb9;
     --accent: var(--cb);
     --good: #1f7a4d; --warn: #9a6b00; --bad: #c0392b;
-    /* Uniform SF system font; SF Mono for sequence/data so columns still align. */
+    --shadow: 0 1px 2px rgba(25, 26, 38, .05);
     --ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', system-ui, sans-serif;
     --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
   }
@@ -46,8 +44,9 @@
       --bg: #16150f; --panel: #1e1d15; --panel2: #25241a; --line: #34322a;
       --fg: #ece9dd; --muted: #9a978a; --paper-on-accent: #16150f;
       --cb: #6b80ff; --umi: #2bb98f; --linker: #8b93a3; --poly: #f0bd55;
-      --insert: #ff7a45; --index: #b974d6; --adapter: #6f6a58;
+      --insert: #ff7a45; --index: #b974d6; --adapter: #6a6553;
       --good: #45c98a; --warn: #f0bd55; --bad: #ff7a6b;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .35);
     }
   }
   * { box-sizing: border-box; }
@@ -63,7 +62,8 @@
   .tag { color: var(--muted); margin-top: 6px; font-size: 13.5px; }
   .priv { color: var(--good); font-size: 13px; margin-top: 10px; }
   main { max-width: 920px; margin: 0 auto; padding: 12px 24px 60px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 18px; margin-top: 18px; box-shadow: 0 1px 2px rgba(25,26,38,.05); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 18px; margin-top: 18px; box-shadow: var(--shadow); }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
   .row { display: flex; gap: 14px; flex-wrap: wrap; }
   .drop {
     flex: 1 1 260px; background: var(--panel2); border: 1.5px dashed var(--line);
@@ -73,12 +73,16 @@
   .drop .lbl { font-weight: 600; }
   .drop .file { color: var(--muted); font-size: 13px; margin-top: 6px; word-break: break-all; }
   .drop input { display: none; }
-  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
   .tab {
     background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
     border-radius: 6px; padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer;
+    min-height: 44px; display: inline-flex; align-items: center;
   }
   .tab.active { background: var(--accent); color: var(--paper-on-accent); border-color: var(--accent); font-weight: 600; }
+  .examples { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+  .examples-lbl { color: var(--muted); font-size: 12px; }
+  .tab.ex { font-size: 12px; font-family: var(--mono); }
   .pane { display: none; }
   .pane.active { display: block; }
   textarea {
@@ -94,6 +98,7 @@
     flex: 1 1 240px; background: var(--panel2); color: var(--fg);
     border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px; font: inherit;
   }
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   table.runs { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13.5px; }
   table.runs th, table.runs td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
   table.runs th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
@@ -106,11 +111,11 @@
   tr.detail .why { margin-top: 4px; }
   .why-toggle {
     background: none; border: 0; color: var(--accent); font: inherit; font-size: 12px;
-    padding: 2px 4px; margin-left: 6px; cursor: pointer; white-space: nowrap;
+    padding: 4px 8px; margin-left: 6px; cursor: pointer; white-space: nowrap;
+    min-height: 28px;
   }
   .why-toggle::before { content: '\25b8\00a0'; }
   .why-toggle[aria-expanded="true"]::before { content: '\25be\00a0'; }
-  /* Read-structure track: proportional region blocks (widths ∝ bp), each labelled. */
   .track-lbl { font-size: 12px; color: var(--muted); margin: 16px 0 5px; }
   .track { display: flex; gap: 2px; height: 30px; font-family: var(--mono); font-size: 11px; font-weight: 500; }
   .seg { display: flex; align-items: center; justify-content: center; color: var(--paper-on-accent);
@@ -120,7 +125,7 @@
   .seg-insert { background: var(--insert); }
   .seg-adapter { background: var(--adapter); color: var(--fg); }
   .why { margin-top: 16px; }
-  .why h4 { margin: 0 0 8px; font-family: var(--ui); font-size: 15px; color: var(--fg); font-weight: 600; }
+  .why h3 { margin: 0 0 8px; font-family: var(--ui); font-size: 15px; color: var(--fg); font-weight: 600; }
   .why-row { padding: 9px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
   .why-row:first-of-type { border-top: 0; }
   .why-sig { color: var(--accent); font-weight: 600; }
@@ -129,9 +134,8 @@
   .why-concl { margin-top: 3px; }
   .why-legend { margin-top: 10px; color: var(--muted); font-size: 12px; font-style: italic; }
   .why-notes { color: var(--muted); }
-  /* Inline bar charts (pure CSS) that visualise the scoring signals. */
   .plots { margin-top: 16px; }
-  .plots h4 { margin: 16px 0 6px; font-family: var(--ui); font-size: 13px; color: var(--fg); font-weight: 600; }
+  .plots h3 { margin: 16px 0 6px; font-family: var(--ui); font-size: 13px; color: var(--fg); font-weight: 600; }
   .bar-row { display: flex; align-items: center; gap: 10px; margin: 3px 0; font-size: 12px; }
   .bar-label { flex: 0 0 150px; text-align: right; color: var(--muted); font-family: var(--mono);
                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -156,17 +160,17 @@
   }
   button {
     background: var(--accent); color: var(--paper-on-accent); border: 0; border-radius: 6px;
-    padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer;
+    padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; min-height: 44px;
   }
   button.sec { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); }
+  input[type=text], input[type=number] { min-height: 44px; }
   button:disabled { opacity: .5; cursor: default; }
   .status { color: var(--muted); font-size: 13px; margin-top: 12px; min-height: 18px; }
   .status.err { color: var(--bad); }
   .verdict { display: none; }
   .verdict.show { display: block; }
-  .vhead { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .vhead { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; margin: 0; }
   .vmain { font-family: var(--ui); font-size: 24px; font-weight: 600; margin: 4px 0; }
-  /* Confidence always carries the literal word, so colour is redundant (CVD-safe). */
   .pill { display: inline-block; padding: 2px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }
   .pill.high { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
   .pill.medium { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
@@ -180,6 +184,20 @@
   pre { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 14px;
         overflow: auto; font-family: var(--mono); font-size: 12.5px; color: var(--fg); max-height: 460px; }
   a { color: var(--accent); }
+  a:hover { color: color-mix(in srgb, var(--accent) 75%, var(--fg)); }
+  button { transition: filter .12s ease, background .12s ease, border-color .12s ease; }
+  button:hover:not(:disabled) { filter: brightness(0.96); }
+  button:active:not(:disabled) { filter: brightness(0.92); }
+  .tab { transition: border-color .12s ease, color .12s ease, background .12s ease; }
+  .tab:hover:not(.active) { border-color: var(--accent); color: var(--fg); }
+  .drop:hover { border-color: var(--accent); }
+  .why-toggle:hover { text-decoration: underline; }
+  summary:hover { color: var(--fg); }
+  button:focus-visible, .tab:focus-visible, .drop:focus-visible,
+  input:focus-visible, textarea:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  button:not(.sec):focus-visible, .tab.active:focus-visible { outline-color: var(--fg); }
   footer { max-width: 920px; margin: 0 auto; padding: 0 24px 40px; color: var(--muted); font-size: 13px; }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition: none !important; animation: none !important; }
@@ -196,19 +214,19 @@
 <main>
   <div class="card">
     <div class="tabs">
-      <button class="tab active" id="tabFiles" type="button">Upload files</button>
+      <button class="tab active" id="tabAcc" type="button">From accession</button>
+      <button class="tab" id="tabFiles" type="button">Upload files</button>
       <button class="tab" id="tabPaste" type="button">Paste reads</button>
-      <button class="tab" id="tabAcc" type="button">From accession</button>
     </div>
 
-    <div class="pane active" id="paneFiles">
+    <div class="pane" id="paneFiles">
       <div class="row">
-        <div class="drop" id="drop1">
+        <div class="drop" id="drop1" role="button" tabindex="0">
           <div class="lbl">R1 (barcode read)</div>
           <div class="file" id="file1">drop a .fastq / .fastq.gz here, or click</div>
           <input type="file" id="in1" accept=".fastq,.fq,.gz,.fastq.gz,.fq.gz" />
         </div>
-        <div class="drop" id="drop2">
+        <div class="drop" id="drop2" role="button" tabindex="0">
           <div class="lbl">R2 (cDNA read)</div>
           <div class="file" id="file2">drop a .fastq / .fastq.gz here, or click</div>
           <input type="file" id="in2" accept=".fastq,.fq,.gz,.fastq.gz,.fq.gz" />
@@ -219,23 +237,30 @@
     <div class="pane" id="panePaste">
       <div class="row">
         <div style="flex: 1 1 260px;">
-          <p class="ta-lbl">R1 (barcode read) <span class="hint">plain-text FASTQ</span></p>
-          <textarea id="ta1" spellcheck="false" placeholder="@read1&#10;ACGT...&#10;+&#10;IIII..."></textarea>
+          <p class="ta-lbl" id="lblTa1">R1 (barcode read) <span class="hint">plain-text FASTQ</span></p>
+          <textarea id="ta1" aria-labelledby="lblTa1" spellcheck="false" placeholder="@read1&#10;ACGT...&#10;+&#10;IIII..."></textarea>
         </div>
         <div style="flex: 1 1 260px;">
-          <p class="ta-lbl">R2 (cDNA read) <span class="hint">plain-text FASTQ</span></p>
-          <textarea id="ta2" spellcheck="false" placeholder="@read1&#10;ACGT...&#10;+&#10;IIII..."></textarea>
+          <p class="ta-lbl" id="lblTa2">R2 (cDNA read) <span class="hint">plain-text FASTQ</span></p>
+          <textarea id="ta2" aria-labelledby="lblTa2" spellcheck="false" placeholder="@read1&#10;ACGT...&#10;+&#10;IIII..."></textarea>
         </div>
       </div>
     </div>
 
-    <div class="pane" id="paneAcc">
+    <div class="pane active" id="paneAcc">
       <div class="acc-row">
         <input type="text" id="accInput" spellcheck="false"
+               aria-label="Study, project, or run accession"
                placeholder="study, project, or run: SRP / ERP / GSE / PRJ / SRR / ERR…" />
         <button id="btnFetchRuns" type="button">Fetch runs</button>
       </div>
-      <div class="status" id="accStatus"></div>
+      <div class="examples">
+        <span class="examples-lbl">try an example:</span>
+        <button class="tab ex" type="button" data-acc="SRR14523778">SRR14523778 · Drop-seq run</button>
+        <button class="tab ex" type="button" data-acc="ERR4901831">ERR4901831 · 10x 3′ run</button>
+        <button class="tab ex" type="button" data-acc="SRP319698">SRP319698 · study (lists runs)</button>
+      </div>
+      <div class="status" id="accStatus" role="status" aria-live="polite"></div>
       <div id="runsWrap"></div>
     </div>
 
@@ -244,11 +269,11 @@
       <button id="btnCheck" disabled>Run full check</button>
       <button id="btnAssay" class="sec" disabled>Detect assay</button>
     </div>
-    <div class="status" id="status">Loading WebAssembly module…</div>
+    <div class="status" id="status" role="status" aria-live="polite">loading analyzer…</div>
   </div>
 
   <div class="card verdict" id="verdict">
-    <div class="vhead" id="vhead">Result</div>
+    <h2 class="vhead" id="vhead">Result</h2>
     <div class="vmain" id="vmain">—</div>
     <div id="vconf"></div>
     <div id="vtrack"></div>
@@ -264,6 +289,7 @@
 
 <footer>
   Samples the first <em>N</em> reads only. Accessions stream from <a href="https://seqout.org">seqout.org</a> + ENA.
+  &nbsp;·&nbsp; <a href="assay-structures.html">assay structures</a>
   &nbsp;·&nbsp; <a href="https://github.com/saketlab/preflightx">source</a>
 </footer>
 
@@ -301,11 +327,12 @@ const els = {
   vgrid: document.getElementById('vgrid'), vwhy: document.getElementById('vwhy'),
   raw: document.getElementById('raw'),
 };
-let f1 = null, f2 = null, ready = false, mode = 'files';
+let f1 = null, f2 = null, ready = false, mode = 'acc';
 
 function setStatus(msg, isErr) {
   els.status.textContent = msg;
   els.status.classList.toggle('err', !!isErr);
+  els.status.setAttribute('aria-live', isErr ? 'assertive' : 'polite');
 }
 function haveInputs() {
   if (mode === 'paste') return els.ta1.value.trim() && els.ta2.value.trim();
@@ -328,19 +355,23 @@ function setMode(next) {
     m.tab.classList.toggle('active', m.mode === next);
     m.pane.classList.toggle('active', m.mode === next);
   }
-  // The accession tab runs each run on its own, so the shared single-pair controls
-  // and verdict don't apply there.
   const acc = next === 'acc';
   els.controls.style.display = acc ? 'none' : '';
-  els.status.style.display = acc ? 'none' : '';
   els.verdict.style.display = acc ? 'none' : '';
   refresh();
 }
 for (const m of MODES) m.tab.addEventListener('click', () => setMode(m.mode));
 els.ta1.addEventListener('input', refresh);
 els.ta2.addEventListener('input', refresh);
+setMode('acc'); // accession is the default tab
+for (const chip of document.querySelectorAll('.examples .ex')) {
+  chip.addEventListener('click', () => { els.accInput.value = chip.dataset.acc; fetchRuns(); });
+}
 function wireDrop(drop, input, fileLbl, assign) {
   drop.addEventListener('click', () => input.click());
+  drop.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); input.click(); }
+  });
   input.addEventListener('change', () => {
     if (input.files[0]) { assign(input.files[0]); fileLbl.textContent = input.files[0].name; refresh(); }
   });
@@ -367,10 +398,8 @@ async function gatherBytes() {
   return Promise.all([readHead(f1), readHead(f2)]);
 }
 
-// Fetch the onlist(s) matching the read geometry and hand them to wasm. Try the host
-// first (fast, same-origin when the deploy serves them); fall back to the public
-// scg_lib_structs mirror (CORS-enabled) so it still works when the host has none.
-// All failures are non-fatal: chemistry just stays at medium confidence.
+// Fetch matching onlists (host first, then the scg_lib_structs mirror). All failures
+// are non-fatal: chemistry falls back to geometry + TSO.
 async function ensureWhitelists(b1, b2, n) {
   let needed;
   try {
@@ -388,7 +417,6 @@ async function ensureWhitelists(b1, b2, n) {
         wlLoaded.add(name);
         break;
       } catch {
-        // try the next source
       }
     }
   }
@@ -399,9 +427,8 @@ function pill(conf) {
   return `<span class="pill ${c}">${c} confidence</span>`;
 }
 function stat(k, v) { return `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`; }
+function fmtDur(ms) { return ms < 1000 ? `${ms.toFixed(0)} ms` : `${(ms / 1000).toFixed(2)} s`; }
 
-// Render a "how we got here" ledger: numbered steps (measured → conclusion [+nats]),
-// a legend, and any notes. `steps` is [{signal, observation, conclusion, llr}].
 function renderLedger(el, steps, legend, notes) {
   if (!steps.length && !(notes && notes.length)) { el.innerHTML = ''; return; }
   const rows = steps.map((e, i) => {
@@ -419,10 +446,9 @@ function renderLedger(el, steps, legend, notes) {
   const legendHtml = legend ? `<div class="why-legend">${escapeHtml(legend)}</div>` : '';
   const noteHtml = (notes && notes.length)
     ? `<div class="why-row why-notes">${notes.map(escapeHtml).join('<br>')}</div>` : '';
-  el.innerHTML = `<h4>How we got here</h4>${rows}${legendHtml}${noteHtml}`;
+  el.innerHTML = `<h3>How we got here</h3>${rows}${legendHtml}${noteHtml}`;
 }
 
-// Build ledger args straight from a chemistry report's interpretation chain.
 function chemLedger(chem) {
   const ev = (chem && chem.interpretation) || [];
   const steps = ev.map(e => ({
@@ -438,7 +464,6 @@ function renderWhy(el, chem) {
   renderLedger(el, L.steps, L.legend, L.notes);
 }
 
-// One horizontal bar: label · fill (width = value/max) · value text.
 function bar(label, frac, color, valText) {
   const w = Math.max(0, Math.min(100, 100 * frac));
   return `<div class="bar-row"><div class="bar-label">${escapeHtml(label)}</div>` +
@@ -446,14 +471,11 @@ function bar(label, frac, color, valText) {
     `<div class="bar-val">${escapeHtml(valText)}</div></div>`;
 }
 
-// Visualise what the sampled reads are made of (base composition, content/quality)
-// and the scoring signals (onlist overlap, TSO level, R1 length spread).
 function renderPlots(el, r) {
   const chem = r.chemistry || {}, comp = r.composition || {}, size = r.size || {};
   const r2 = size.r2 || size.r1 || {};
   let html = '';
 
-  // Base composition: a single stacked bar (A/C/G/T/N) of the cDNA read.
   if (Array.isArray(comp.base_pct)) {
     const B = comp.base_pct;
     const lab = ['A', 'C', 'G', 'T', 'N'];
@@ -461,11 +483,10 @@ function renderPlots(el, r) {
     const cells = lab.map((l, i) => ({ l, pct: B[i], c: col[i] })).filter(s => s.pct > 0.05)
       .map(s => `<div class="seg" style="flex:${s.pct};background:${s.c}" title="${s.l} ${s.pct.toFixed(1)}%">${s.pct >= 8 ? s.l : ''}</div>`).join('');
     const legend = lab.map((l, i) => `${l} ${B[i].toFixed(1)}%`).join(' · ');
-    html += `<h4>Base composition (R2 cDNA)</h4><div class="track">${cells}</div>` +
+    html += `<h3>Base composition (R2 cDNA)</h3><div class="track">${cells}</div>` +
       `<div class="bar-legend" style="margin-left:0">${legend}</div>`;
   }
 
-  // Read content / quality bars.
   const qc = [];
   if (comp.gc_pct != null) qc.push(['GC content', comp.gc_pct, 'var(--cb)']);
   if (comp.n_pct != null) qc.push(['N bases', comp.n_pct, 'var(--linker)']);
@@ -473,7 +494,7 @@ function renderPlots(el, r) {
   if (comp.homopolymer_pct != null) qc.push(['homopolymer reads (polyA/T)', comp.homopolymer_pct, 'var(--poly)']);
   if (r2.low_qual_pct != null) qc.push(['low-quality reads (Q<20)', r2.low_qual_pct, 'var(--insert)']);
   if (qc.length) {
-    html += `<h4>Read content</h4>` + qc.map(([l, v, c]) => bar(l, v / 100, c, v.toFixed(1) + '%')).join('');
+    html += `<h3>Read content</h3>` + qc.map(([l, v, c]) => bar(l, v / 100, c, v.toFixed(1) + '%')).join('');
   }
   if (r2.mean_phred != null) {
     const Q = 40;
@@ -484,17 +505,16 @@ function renderPlots(el, r) {
       <div class="bar-legend">dotted = Q30 (99.9% base-call accuracy), scale 0–${Q}</div>`;
   }
 
-  // Scoring signals.
   const wl = chem.whitelist_scores || [];
   if (wl.length) {
     const rows = wl.map((w, i) =>
       bar(w.filename.replace('.txt.gz', ''), w.pct / 100, i === 0 ? 'var(--cb)' : 'var(--linker)', w.pct.toFixed(0) + '%')).join('');
-    html += `<h4>Barcode → onlist overlap</h4>${rows}`;
+    html += `<h3>Barcode → onlist overlap</h3>${rows}`;
   }
   const tso = (chem.anchor_scores || [])[0];
   if (tso != null) {
     const MAX = 25; // scale so the 1% background and 20% 3' expectation are visible
-    html += `<h4>TSO in R2 (template-switch oligo)</h4>
+    html += `<h3>TSO in R2 (template-switch oligo)</h3>
       <div class="bar-row">
         <div class="bar-label">observed</div>
         <div class="bar-track ticked">
@@ -512,13 +532,11 @@ function renderPlots(el, r) {
     const rows = dist.map(d =>
       bar(d[0] + ' bp', d[1] / total, d[0] === chem.r1_length_dominant ? 'var(--cb)' : 'var(--linker)',
         (100 * d[1] / total).toFixed(0) + '%')).join('');
-    html += `<h4>R1 read-length distribution</h4>${rows}`;
+    html += `<h3>R1 read-length distribution</h3>${rows}`;
   }
   el.innerHTML = html;
 }
 
-// Assay-detector ledger: synthesize the reasoning from the top hit + ranking, since
-// detect_assay scores geometry + linker anchors rather than emitting a chain itself.
 function assaySteps(r) {
   const hits = r.hits || [];
   const top = hits[0];
@@ -560,8 +578,6 @@ function assaySteps(r) {
   ];
 }
 
-// Draw the barcode read as proportional region blocks (widths ∝ bp). Each block
-// is labelled, so the structure reads without relying on colour (CVD-safe).
 function renderTrack(el, chem) {
   if (!chem || chem.is_single_cell === false || chem.cb_len == null) { el.innerHTML = ''; return; }
   const segs = [];
@@ -574,7 +590,7 @@ function renderTrack(el, chem) {
   el.innerHTML = `<div class="track-lbl">R1 read structure (${total} bp barcode read)</div><div class="track">${blocks}</div>`;
 }
 
-function renderCheck(r) {
+function renderCheck(r, ms) {
   const chem = r.chemistry || {};
   const notSc = chem.is_single_cell === false;
   els.vhead.textContent = 'Chemistry';
@@ -590,12 +606,13 @@ function renderCheck(r) {
   if (r.composition) g.push(stat('GC %', r.composition.gc_pct));
   if (r.composition) g.push(stat('organism hint', r.composition.guess_organism_family));
   if (r.size) g.push(stat('adequate for SC', r.size.adequate_for_sc ? 'yes' : 'no'));
+  if (ms != null) g.push(stat('analysis time', fmtDur(ms)));
   els.vgrid.innerHTML = g.join('');
   renderTrack(els.vtrack, chem);
   renderPlots(els.vplots, r);
   renderWhy(els.vwhy, chem);
 }
-function renderAssay(r) {
+function renderAssay(r, ms) {
   const top = (r.hits && r.hits[0]) || {};
   els.vhead.textContent = 'Top assay (seqspec catalogue)';
   els.vmain.textContent = top.name || top.assay_id || top.spec_file || 'no match';
@@ -607,6 +624,7 @@ function renderAssay(r) {
   if (top.expected_len != null) g.push(stat('expected len', top.expected_len));
   if (top.observed_len != null) g.push(stat('observed len', top.observed_len));
   if (top.anchors_total != null) g.push(stat('anchors', `${top.anchors_found}/${top.anchors_total}`));
+  if (ms != null) g.push(stat('analysis time', fmtDur(ms)));
   els.vgrid.innerHTML = g.join('');
   els.vtrack.innerHTML = '';
   els.vplots.innerHTML = '';
@@ -628,18 +646,20 @@ async function run(kind) {
     const [b1, b2] = await gatherBytes();
     const n = Math.max(1000, parseInt(els.nreads.value, 10) || 50000);
     if (kind === 'check') {
-      setStatus('fetching 10x whitelist…');
+      setStatus('fetching barcode onlist…');
       await ensureWhitelists(b1, b2, n);
     }
     setStatus(`analyzing first ${n.toLocaleString()} reads…`);
     // Yield so the status paints before the synchronous wasm call.
     await new Promise(r => setTimeout(r, 0));
+    const t0 = performance.now();
     const json = kind === 'check' ? check(b1, b2, n) : detect_assay(b1, b2, n);
+    const ms = performance.now() - t0;
     const r = JSON.parse(json);
     els.raw.textContent = JSON.stringify(r, null, 2);
-    (kind === 'check' ? renderCheck : renderAssay)(r);
+    (kind === 'check' ? renderCheck : renderAssay)(r, ms);
     els.verdict.classList.add('show');
-    setStatus('done.');
+    setStatus(`done — analyzed in ${fmtDur(ms)}.`);
   } catch (e) {
     setStatus('error: ' + (e && e.message ? e.message : e), true);
   } finally {
@@ -662,6 +682,7 @@ const PRJ_RE = /^PRJ[A-Z]+\d+$/, SAMPEXP_RE = /^(GSM|[SED]RS|[SED]RX)\d+$/;
 function accStatus(msg, isErr) {
   els.accStatus.textContent = msg;
   els.accStatus.classList.toggle('err', !!isErr);
+  els.accStatus.setAttribute('aria-live', isErr ? 'assertive' : 'polite');
 }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -694,8 +715,6 @@ async function resolveStudy(acc) {
   }
   throw new Error(`unsupported accession: ${A} (try SRP/ERP/DRP/GSE/PRJ)`);
 }
-// Find the first SRP/ERP/DRP token in a field that may be a string, an array of
-// strings, or absent.
 function firstStudy(field) {
   if (field == null) return null;
   const items = Array.isArray(field) ? field : [field];
@@ -744,12 +763,13 @@ async function runOne(ctx) {
     ctx.resCell.textContent = 'analyzing…';
     await ensureWhitelists(b1, b2, n);
     await new Promise(r => setTimeout(r, 0));
+    const t0 = performance.now();
     const r = JSON.parse(check(b1, b2, n));
+    const ms = performance.now() - t0;
     const c = r.chemistry || {};
-    // Show how many reads informed the call. Flag a short sample only when it was a
-    // truncated fetch, not when the detector stopped early on its own (early_stop).
+    // Flag a short sample only on a truncated fetch, not when the detector early-stopped.
     const truncated = c.reads_sampled < n && !c.early_stop;
-    const reads = `<span style="color:var(--muted)"> · ${c.reads_sampled.toLocaleString()} reads${truncated ? ' (input ended early)' : ''}</span>`;
+    const reads = `<span style="color:var(--muted)"> · ${c.reads_sampled.toLocaleString()} reads${truncated ? ' (input ended early)' : ''} · ${fmtDur(ms)}</span>`;
     if (c.is_single_cell === false) {
       ctx.resCell.innerHTML =
         `<span style="color:var(--warn);font-weight:650">Not single-cell</span> ` +
@@ -759,8 +779,6 @@ async function runOne(ctx) {
         ? ` <span style="color:var(--muted)">CB${c.cb_len}+UMI${c.umi_len}</span>` : '';
       ctx.resCell.innerHTML = `${escapeHtml(c.assay_display || c.assay_id || 'unknown')} ${pill(c.confidence)}${geom}${reads}`;
     }
-    // Render the full visual breakdown (read structure + plots + reasoning) into the
-    // hidden detail row, and add a toggle to open it.
     ctx.why.replaceChildren();
     const trackDiv = document.createElement('div'); ctx.why.append(trackDiv); renderTrack(trackDiv, c);
     const plotsDiv = document.createElement('div'); plotsDiv.className = 'plots'; ctx.why.append(plotsDiv); renderPlots(plotsDiv, r);
@@ -778,7 +796,6 @@ async function runOne(ctx) {
       toggle.setAttribute('aria-expanded', String(open));
     });
     ctx.resCell.append(toggle);
-    // For a single run (e.g. a run-ID query) show the plots straight away.
     if (ctx.soleRun) {
       ctx.detailTr.hidden = false;
       toggle.setAttribute('aria-expanded', 'true');
@@ -803,7 +820,7 @@ function renderRunsTable(study, data, runs) {
 
   const table = document.createElement('table');
   table.className = 'runs';
-  table.innerHTML = '<thead><tr><th>run</th><th>layout</th><th>FASTQ</th><th></th><th>result</th></tr></thead>';
+  table.innerHTML = '<thead><tr><th>run</th><th>layout</th><th>FASTQ</th><th><span class="sr-only">action</span></th><th>result</th></tr></thead>';
   const tb = document.createElement('tbody');
   const ctxs = [];
   for (const run of runs) {
@@ -820,8 +837,6 @@ function renderRunsTable(study, data, runs) {
     if (!pair) { btn.disabled = true; tdRes.textContent = 'single-end'; }
     tdBtn.append(btn);
     tr.append(tdAcc, tdLay, tdFiles, tdBtn, tdRes);
-    // Hidden detail row holding the per-run reasoning ledger; toggled open by a
-    // button added to the result cell once the run completes.
     const detailTr = document.createElement('tr'); detailTr.className = 'detail'; detailTr.hidden = true;
     const detailTd = document.createElement('td'); detailTd.colSpan = 5;
     const why = document.createElement('div'); why.className = 'why';
@@ -832,7 +847,10 @@ function renderRunsTable(study, data, runs) {
     btn.addEventListener('click', () => runOne(ctx));
   }
   table.append(tb);
-  els.runsWrap.replaceChildren(head, table);
+  const wrap = document.createElement('div');
+  wrap.className = 'table-wrap';
+  wrap.append(table);
+  els.runsWrap.replaceChildren(head, wrap);
 
   runAll.addEventListener('click', async () => {
     runAll.disabled = true;
@@ -884,7 +902,7 @@ els.accInput.addEventListener('keydown', e => { if (e.key === 'Enter') fetchRuns
   try {
     await init();
     ready = true;
-    setStatus('ready. Drop or paste an R1/R2 FASTQ pair to begin.');
+    setStatus('analyzer ready.');
     refresh();
   } catch (e) {
     setStatus('failed to load wasm module: ' + e, true);
