@@ -1,4 +1,4 @@
-# preflightx — resolved assay read geometries
+# preflightx: resolved assay read geometries
 
 _Generated from the vendored seqspec catalogue (`vendor/seqspec`) by
 `cargo test gen_assay_docs -- --ignored`. Do not edit by hand._
@@ -54,8 +54,8 @@ scifi-RNA-Seq   (R1.fastq.gz, 84 bp)
 | 10xFB-3prime | `10xfb_3prime` | rna, protein | R1.fastq.gz, 28 bp (CB 16 + UMI 12) |
 | 10xFB protein and RNA assay 5' | `10xfb_5prime` | rna, protein | R1.fastq.gz, 26 bp (CB 16 + UMI 10) |
 | 10xFB-VDJ-5prime | `10xfb_vdj_5prime` | rna, vdj | R1.fastq.gz, 26 bp (CB 16 + UMI 10) |
-| Example assay | `10xv3_scrnaseq_element_adept_truseq_dual` | rna | _plate-based — no in-read cell barcode_ |
-| Example assay | `10xv3_scrnaseq_illumina_truseq_dual` | rna | _plate-based — no in-read cell barcode_ |
+| Example assay | `10xv3_scrnaseq_element_adept_truseq_dual` | rna | _plate-based, no in-read cell barcode_ |
+| Example assay | `10xv3_scrnaseq_illumina_truseq_dual` | rna | _plate-based, no in-read cell barcode_ |
 | BD-Rhapsody-EB | `bd_rhapsody_eb` | rna | R1.fastq.gz, 43 bp (CB 27 + UMI 8) |
 | BD-Rhapsody-v1/Illumina | `bd_rhapsody_v1` | rna | R1.fastq.gz, 60 bp (CB 27 + UMI 8) |
 | CEL-Seq | `cel_seq` | rna | R1.fastq.gz, 8 bp (CB 8) |
@@ -69,7 +69,7 @@ scifi-RNA-Seq   (R1.fastq.gz, 84 bp)
 | mcSCRB-seq | `mcscrb_seq` | RNA | R1.fastq.gz, 16 bp (CB 6 + UMI 10) |
 | Microwell-seq | `microwell_seq` | RNA | R1.fastq.gz, 54 bp (CB 18 + UMI 6) |
 | WT Mega v2 | `parse_wt_v2` | rna | R2.fastq.gz, 86 bp (CB 24 + UMI 10) |
-| Pi-ATAC-seq | `pi_atac_seq` | ATAC | _plate-based — no in-read cell barcode_ |
+| Pi-ATAC-seq | `pi_atac_seq` | ATAC | _plate-based, no in-read cell barcode_ |
 | PIPseq V2 | `pipseqv2` | RNA | R1.fastq.gz, 50 bp (CB 24 + UMI 12) |
 | PIPseq V3 | `pipseqv3` | RNA | R1.fastq.gz, 51 bp (CB 28 + UMI 12) |
 | Quartz-seq | `quartz_seq` | RNA | R2.fastq.gz, 6 bp (CB 6) |
@@ -81,8 +81,8 @@ scifi-RNA-Seq   (R1.fastq.gz, 84 bp)
 | Seq-well | `seq_well` | RNA | R1.fastq.gz, 20 bp (CB 12 + UMI 8) |
 | Seq-Well-S3 | `seq_well_s3` | RNA | R1.fastq.gz, 20 bp (CB 12 + UMI 8) |
 | SHARE-Seq | `share_seq` | atac, rna | R2.fastq.gz, 84 bp (CB 24) |
-| Smart-seq2 | `smart_seq2` | RNA | _plate-based — no in-read cell barcode_ |
-| Smart-seq3 | `smart_seq3` | RNA_end, RNA_internal | _plate-based — no in-read cell barcode_ |
+| Smart-seq2 | `smart_seq2` | RNA | _plate-based, no in-read cell barcode_ |
+| Smart-seq3 | `smart_seq3` | RNA_end, RNA_internal | _plate-based, no in-read cell barcode_ |
 | sn-m3C-seq | `sn_m3c_seq` | methyl, hic | R1.fastq.gz, 8 bp (CB 8) |
 | snmCT-seq | `snmctseq` | methyl, rna | R1.fastq.gz, 8 bp (CB 8) |
 | SPLiT-seq | `split_seq` | RNA | R2.fastq.gz, 94 bp (CB 24 + UMI 10) |
@@ -91,8 +91,8 @@ scifi-RNA-Seq   (R1.fastq.gz, 84 bp)
 | STRT-seq-C1 | `strt_seq_c1` | RNA | R2.fastq.gz, 8 bp (CB 8) |
 | SugarSeq/Illumina | `sugarseq` | rna, tag | R2.fastq.gz, 28 bp (CB 16 + UMI 12) |
 | SureCell | `surecell` | RNA | R1.fastq.gz, 59 bp (CB 18 + UMI 8) |
-| 10x Genomics | `tang2009` | RNA | _plate-based — no in-read cell barcode_ |
-| template | `template` | mode | _plate-based — no in-read cell barcode_ |
+| 10x Genomics | `tang2009` | RNA | _plate-based, no in-read cell barcode_ |
+| template | `template` | mode | _plate-based, no in-read cell barcode_ |
 | VASA-seq-drop | `vasa_seq_drop` | RNA | R2.fastq.gz, 14 bp (CB 8 + UMI 6) |
 | VASA-seq | `vasa_seq_plate` | RNA | R2.fastq.gz, 6 bp (CB 6) |
 

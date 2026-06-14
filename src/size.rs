@@ -101,24 +101,11 @@ pub fn size_sanity(r1: &Path, r2: Option<&Path>, n: usize) -> Result<SizeReport>
     let r1_summary = per_file(r1, n)?;
     let r2_summary = r2.map(|p| per_file(p, n)).transpose()?;
     let mut notes = Vec::new();
-    let adequate = r1_summary.n_reads_sampled >= 1000 && r1_summary.mean_phred >= 25.0;
-    if r1_summary.n_reads_sampled < n {
-        notes.push(format!(
-            "Sampled only {} reads from R1 (asked for {}); file may be small.",
-            r1_summary.n_reads_sampled, n
-        ));
-    }
-    if r1_summary.mean_phred < 25.0 {
-        notes.push(format!(
-            "R1 mean PHRED is {:.1} (<25); low base quality reduces downstream accuracy.",
-            r1_summary.mean_phred
-        ));
-    }
-    if r1_summary.low_qual_pct > 10.0 {
-        notes.push(format!(
-            "{:.1}% of R1 reads have mean PHRED < 20.",
-            r1_summary.low_qual_pct
-        ));
+    let mut adequate = r1_summary.n_reads_sampled >= 1000 && r1_summary.mean_phred >= 25.0;
+    append_quality_notes("R1", &r1_summary, n, &mut notes);
+    if let Some(r2_summary) = &r2_summary {
+        append_quality_notes("R2", r2_summary, n, &mut notes);
+        adequate &= r2_summary.n_reads_sampled >= 1000 && r2_summary.mean_phred >= 25.0;
     }
 
     Ok(SizeReport {
@@ -127,6 +114,27 @@ pub fn size_sanity(r1: &Path, r2: Option<&Path>, n: usize) -> Result<SizeReport>
         adequate_for_sc: adequate,
         notes,
     })
+}
+
+fn append_quality_notes(label: &str, summary: &PerFileSize, requested: usize, notes: &mut Vec<String>) {
+    if summary.n_reads_sampled < requested {
+        notes.push(format!(
+            "Sampled only {} reads from {label} (asked for {}); file may be small.",
+            summary.n_reads_sampled, requested
+        ));
+    }
+    if summary.mean_phred < 25.0 {
+        notes.push(format!(
+            "{label} mean PHRED is {:.1} (<25); low base quality reduces downstream accuracy.",
+            summary.mean_phred
+        ));
+    }
+    if summary.low_qual_pct > 10.0 {
+        notes.push(format!(
+            "{:.1}% of {label} reads have mean PHRED < 20.",
+            summary.low_qual_pct
+        ));
+    }
 }
 
 fn per_file(path: &Path, n: usize) -> Result<PerFileSize> {
@@ -174,30 +182,6 @@ impl BulkReport {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::testutil::{fixed_len_reads, write_fastq};
-
-    #[test]
-    fn dropseq_20bp_is_single_cell() {
-        let p = write_fastq("size_dropseq", &fixed_len_reads(20, 200));
-        let r = bulk_or_sc(&p, 1000).unwrap();
-        std::fs::remove_file(&p).ok();
-        assert_eq!(r.r1_length_dominant, 20);
-        assert_eq!(r.verdict, "single_cell");
-        assert_eq!(r.confidence, "high");
-    }
-
-    #[test]
-    fn long_r1_is_bulk() {
-        let p = write_fastq("size_bulk", &fixed_len_reads(90, 200));
-        let r = bulk_or_sc(&p, 1000).unwrap();
-        std::fs::remove_file(&p).ok();
-        assert_eq!(r.verdict, "bulk_or_5prime_broken");
-    }
-}
-
 impl SizeReport {
     pub fn print(&self) {
         println!("{}", "Size + quality sanity".bold().cyan());
@@ -221,5 +205,57 @@ impl SizeReport {
         for n in &self.notes {
             println!("    {} {}", "note:".dimmed(), n);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{fixed_len_reads, write_fastq};
+    use std::io::Write;
+
+    fn write_low_qual_fastq(name: &str, len: usize, count: usize) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("{name}.fastq"));
+        let mut f = std::fs::File::create(&p).unwrap();
+        for i in 0..count {
+            writeln!(f, "@r{i}").unwrap();
+            writeln!(f, "{}", "A".repeat(len)).unwrap();
+            writeln!(f, "+").unwrap();
+            writeln!(f, "{}", "!".repeat(len)).unwrap();
+        }
+        p
+    }
+
+    #[test]
+    fn dropseq_20bp_is_single_cell() {
+        let p = write_fastq("size_dropseq", &fixed_len_reads(20, 200));
+        let r = bulk_or_sc(&p, 1000).unwrap();
+        std::fs::remove_file(&p).ok();
+        assert_eq!(r.r1_length_dominant, 20);
+        assert_eq!(r.verdict, "single_cell");
+        assert_eq!(r.confidence, "high");
+    }
+
+    #[test]
+    fn long_r1_is_bulk() {
+        let p = write_fastq("size_bulk", &fixed_len_reads(90, 200));
+        let r = bulk_or_sc(&p, 1000).unwrap();
+        std::fs::remove_file(&p).ok();
+        assert_eq!(r.verdict, "bulk_or_5prime_broken");
+    }
+
+    #[test]
+    fn r2_quality_affects_adequacy_and_notes() {
+        let r1 = write_fastq("size_good_r1", &fixed_len_reads(28, 1_200));
+        let r2 = write_low_qual_fastq("size_bad_r2", 90, 1_200);
+        let report = size_sanity(&r1, Some(&r2), 1_000).unwrap();
+        std::fs::remove_file(&r1).ok();
+        std::fs::remove_file(&r2).ok();
+        assert!(!report.adequate_for_sc);
+        assert!(
+            report.notes.iter().any(|n| n.contains("R2 mean PHRED")),
+            "notes={:?}",
+            report.notes
+        );
     }
 }

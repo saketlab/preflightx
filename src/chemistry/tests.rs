@@ -1,0 +1,213 @@
+use super::*;
+use crate::testutil::write_fastq;
+
+/// A distinct 16-bp cell barcode for index `i` (base-4 encoding of `i`).
+fn distinct_cb(i: usize) -> Vec<u8> {
+    (0..16)
+        .map(|j| b"ACGT"[(i / 4usize.pow(j as u32)) % 4] as char as u8)
+        .collect()
+}
+
+/// `n` synthetic 10x R1 reads (16-bp CB + 12-bp UMI = 28 bp) and matching R2 reads
+/// (TSO at the start when `tso` is set). Returns `(r1, r2, cb_set)`.
+#[allow(clippy::type_complexity)]
+fn tenx_v3_reads(n: usize, tso: bool) -> (Vec<Vec<u8>>, Vec<Vec<u8>>, HashSet<Vec<u8>>) {
+    let mut r1 = Vec::with_capacity(n);
+    let mut cbs = HashSet::new();
+    for i in 0..n {
+        let cb = distinct_cb(i);
+        let mut read = cb.clone();
+        read.extend_from_slice(&[b'A'; 12]); // UMI
+        r1.push(read);
+        cbs.insert(cb);
+    }
+    let r2: Vec<Vec<u8>> = (0..n)
+        .map(|_| {
+            let mut read = Vec::new();
+            if tso {
+                read.extend_from_slice(TSO_PRESENT.seq);
+            }
+            read.resize(90, b'C');
+            read
+        })
+        .collect();
+    (r1, r2, cbs)
+}
+
+#[test]
+fn tenx_v3_with_matching_whitelist_is_high_confidence() {
+    let (r1, r2, cbs) = tenx_v3_reads(200, true);
+    let mut wl_sets: HashMap<&'static str, HashSet<Vec<u8>>> = HashMap::new();
+    wl_sets.insert("3M-february-2018.txt.gz", cbs);
+
+    let a = analyze(&r1, &r2, &wl_sets, None);
+    assert_eq!(
+        a.scored[0].0.id, "10x_3prime_v3",
+        "winner was {}",
+        a.scored[0].0.id
+    );
+    assert_eq!(a.confidence, "high");
+}
+
+#[test]
+fn tenx_3prime_without_whitelist_picks_3prime_family_at_medium() {
+    // TSO present but no whitelist cache: should land on a 3' assay, medium.
+    let (r1, r2, _) = tenx_v3_reads(200, true);
+    let a = analyze(&r1, &r2, &HashMap::new(), Some(200));
+    assert!(
+        a.scored[0].0.id.starts_with("10x_3prime"),
+        "winner was {}",
+        a.scored[0].0.id
+    );
+    assert_eq!(a.confidence, "medium");
+}
+
+#[test]
+fn dropseq_geometry_is_medium_and_correct() {
+    // 20 bp R1 (12 CB + 8 UMI), no TSO, no whitelist -> Drop-seq, geometry-only.
+    let r1: Vec<Vec<u8>> = (0..200)
+        .map(|i| {
+            let mut v = distinct_cb(i); // 16 distinct bases
+            v.resize(20, b'A'); // pad to the 20 bp Drop-seq geometry
+            v
+        })
+        .collect();
+    let r2: Vec<Vec<u8>> = (0..200).map(|_| vec![b'C'; 90]).collect();
+    let a = analyze(&r1, &r2, &HashMap::new(), Some(0));
+    assert_eq!(
+        a.scored[0].0.id, "drop_seq",
+        "winner was {}",
+        a.scored[0].0.id
+    );
+    assert_eq!(a.confidence, "medium");
+}
+
+#[test]
+fn bulk_wgs_reads_are_not_single_cell() {
+    // 100 bp genomic R1, no TSO, no whitelist: must NOT be force-fit to a 10x assay.
+    let r1: Vec<Vec<u8>> = (0..200).map(|_| vec![b'A'; 100]).collect();
+    let r2: Vec<Vec<u8>> = (0..200).map(|_| vec![b'C'; 100]).collect();
+    let a = analyze(&r1, &r2, &HashMap::new(), Some(0));
+    assert!(
+        !a.is_single_cell,
+        "100bp genomic reads should not look single-cell"
+    );
+    let report = build_report(a, false, 200, false);
+    assert_eq!(report.assay_id, "none");
+    assert_eq!(report.assay_display, "Not single-cell");
+    assert_eq!(report.confidence, "low");
+    // The ledger walks all three signals and ends on a clear verdict.
+    assert!(
+        report
+            .interpretation
+            .iter()
+            .any(|e| e.signal == "Barcode geometry"),
+        "reasoning should explain the barcode-geometry check"
+    );
+    assert!(
+        report
+            .interpretation
+            .last()
+            .is_some_and(|e| e.signal == "Verdict" && e.conclusion.contains("not single-cell")),
+        "reasoning should end on a not-single-cell verdict"
+    );
+    assert!(report.notes.iter().any(|n| n.contains("not single-cell")));
+}
+
+#[test]
+fn ambiguous_3p_5p_polarity_is_reported_as_both() {
+    // 26 bp R1 (CB16+UMI10) whose barcodes match the 737K onlist, no TSO. 3'v2 and
+    // 5'v1 share this geometry + onlist, so the polarity must be reported as
+    // unresolved (both names), never a confident single pick.
+    let n = 200;
+    let mut r1 = Vec::new();
+    let mut cbs = HashSet::new();
+    for i in 0..n {
+        let cb = distinct_cb(i);
+        let mut read = cb.clone();
+        read.extend_from_slice(&[b'A'; 10]); // UMI -> 26 bp total
+        r1.push(read);
+        cbs.insert(cb);
+    }
+    let r2: Vec<Vec<u8>> = (0..n).map(|_| vec![b'C'; 90]).collect();
+    let mut wl_sets: HashMap<&'static str, HashSet<Vec<u8>>> = HashMap::new();
+    wl_sets.insert("737K-august-2016.txt.gz", cbs);
+
+    let a = analyze(&r1, &r2, &wl_sets, None);
+    let report = build_report(a, false, n, false);
+    assert!(
+        report.assay_display.contains(" or "),
+        "polarity should be reported as both, got {}",
+        report.assay_display
+    );
+    assert_ne!(
+        report.confidence, "high",
+        "unresolved polarity can't be high"
+    );
+    assert!(report
+        .interpretation
+        .iter()
+        .any(|e| e.signal == "3' vs 5' polarity"));
+}
+
+#[test]
+fn tenx_v3_reads_are_single_cell() {
+    // Guard against the gate over-triggering on genuine single-cell geometry.
+    let (r1, r2, _) = tenx_v3_reads(200, true);
+    let a = analyze(&r1, &r2, &HashMap::new(), Some(180));
+    assert!(a.is_single_cell);
+}
+
+#[test]
+fn candidates_for_includes_within_tolerance() {
+    let ids: Vec<&str> = candidates_for(26).iter().map(|s| s.id).collect();
+    assert!(ids.contains(&"10x_3prime_v2")); // exact 26 bp
+    assert!(ids.contains(&"10x_3prime_v3")); // 28 bp, within +/-2
+    assert!(!ids.contains(&"drop_seq")); // 20 bp, outside tolerance
+}
+
+#[test]
+fn len_profile_reports_the_mode() {
+    let seqs = vec![vec![0u8; 28], vec![0u8; 28], vec![0u8; 26]];
+    let (dom, dist) = len_profile(&seqs);
+    assert_eq!(dom, 28);
+    assert_eq!(dist[0], (28, 2));
+}
+
+#[test]
+fn swapped_inputs_report_barcode_read_as_r2() {
+    let (barcode_r1, cdna_r2, _) = tenx_v3_reads(200, true);
+    let long_read: Vec<Vec<u8>> = cdna_r2;
+    let short_read: Vec<Vec<u8>> = barcode_r1;
+    let a = analyze(&short_read, &long_read, &HashMap::new(), Some(180));
+    let report = build_report(a, true, 200, false);
+    assert_eq!(report.cb_read, "R2");
+}
+
+#[test]
+fn empty_whitelist_cache_keeps_sprt_fast_path() {
+    let (r1_reads, r2_reads, _) = tenx_v3_reads(8_000, true);
+    let r1 = write_fastq("chem_detect_r1", &r1_reads);
+    let r2 = write_fastq("chem_detect_r2", &r2_reads);
+    let cache_dir = std::env::temp_dir().join(format!(
+        "preflightx-empty-cache-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&cache_dir).unwrap();
+
+    let report = detect(&r1, &r2, 8_000, Some(&cache_dir)).unwrap();
+
+    std::fs::remove_file(&r1).ok();
+    std::fs::remove_file(&r2).ok();
+    std::fs::remove_dir_all(&cache_dir).ok();
+
+    assert!(report.early_stop, "expected SPRT early stop with no whitelist data");
+    assert!(
+        report.reads_sampled < 8_000,
+        "expected fewer than the full read budget, got {}",
+        report.reads_sampled
+    );
+}

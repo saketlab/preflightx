@@ -116,8 +116,7 @@ pub fn composition(path: &Path, n: usize) -> Result<CompositionReport> {
         0.0
     };
     let len_stddev = len_var.max(0.0).sqrt();
-    let is_barcode_read = len_stddev < 1.0
-        && !libstruct::sc_geometries_matching(mean_len.round() as usize, 1).is_empty();
+    let is_barcode_read = libstruct::is_fixed_barcode_read(mean_len, len_stddev);
 
     // Very rough organism heuristic. This is a SIGNAL, not a CALL.
     let guess = if is_barcode_read {
@@ -174,6 +173,31 @@ pub fn composition(path: &Path, n: usize) -> Result<CompositionReport> {
     })
 }
 
+impl CompositionReport {
+    pub fn print(&self) {
+        println!("{}", "Sequence composition".bold().cyan());
+        println!("  GC content:          {:.2}%", self.gc_pct);
+        println!("  N bases:             {:.2}%", self.n_pct);
+        println!(
+            "  low-complexity:      {:.2}% of reads",
+            self.low_complexity_pct
+        );
+        println!(
+            "  long homopolymer:    {:.2}% of reads",
+            self.homopolymer_pct
+        );
+        let hint = if self.is_barcode_read {
+            self.guess_organism_family.dimmed()
+        } else {
+            self.guess_organism_family.yellow()
+        };
+        println!("  {} {}", "ORGANISM HINT:".bold(), hint);
+        for n in &self.notes {
+            println!("    {} {}", "note:".dimmed(), n);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,30 +228,5 @@ mod tests {
         std::fs::remove_file(&p).ok();
         assert!(!r.is_barcode_read);
         assert_eq!(r.guess_organism_family, "mammalian (human/mouse/rat range)");
-    }
-}
-
-impl CompositionReport {
-    pub fn print(&self) {
-        println!("{}", "Sequence composition".bold().cyan());
-        println!("  GC content:          {:.2}%", self.gc_pct);
-        println!("  N bases:             {:.2}%", self.n_pct);
-        println!(
-            "  low-complexity:      {:.2}% of reads",
-            self.low_complexity_pct
-        );
-        println!(
-            "  long homopolymer:    {:.2}% of reads",
-            self.homopolymer_pct
-        );
-        let hint = if self.is_barcode_read {
-            self.guess_organism_family.dimmed()
-        } else {
-            self.guess_organism_family.yellow()
-        };
-        println!("  {} {}", "ORGANISM HINT:".bold(), hint);
-        for n in &self.notes {
-            println!("    {} {}", "note:".dimmed(), n);
-        }
     }
 }

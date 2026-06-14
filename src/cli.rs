@@ -6,7 +6,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use crate::{assaydetect, chemistry, composition, report, size, whitelists};
+use crate::{assaydetect, chemistry, composition, fastq, report, sex, size, whitelists};
 
 #[derive(Parser)]
 #[command(name = "preflightx", version, about, long_about = None)]
@@ -21,6 +21,14 @@ struct Cli {
     /// Emit JSON instead of the human-readable report.
     #[arg(long, global = true)]
     json: bool,
+
+    /// Species for the sex check (a bundled panel; e.g. human, mouse).
+    #[arg(long, global = true, default_value = "human")]
+    species: String,
+
+    /// Reads to sample for the sex check (Y/XIST are sparse, so deeper than --n-reads).
+    #[arg(long, global = true, default_value_t = 200_000)]
+    sex_reads: usize,
 }
 
 #[derive(Subcommand)]
@@ -35,6 +43,10 @@ enum Cmd {
     Size { r1: PathBuf, r2: Option<PathBuf> },
     /// GC content, low-complexity, ambiguous-base composition.
     Composition { r1: PathBuf },
+    /// Sample-level genetic sex from cDNA reads (Y-gene + XIST k-mers; alignment-free).
+    /// Works for single-cell, single-end bulk, and paired-end bulk: barcode reads are
+    /// skipped and every cDNA read is scanned (both mates for paired-end bulk).
+    Sex { r1: PathBuf, r2: Option<PathBuf> },
     /// Generic seqspec-driven detection: rank any catalogued single-cell assay
     /// against the reads (geometry + linker anchors, no whitelist needed).
     DetectAssay { r1: PathBuf, r2: PathBuf },
@@ -62,9 +74,14 @@ pub fn run() -> Result<()> {
             };
             let bulk = size::bulk_or_sc(&r1, cli.n_reads)?;
             let sz = size::size_sanity(&r1, r2.as_deref(), cli.n_reads)?;
-            // Composition signal lives in the cDNA read (R2); R1 is barcodes.
-            let comp_target = r2.as_deref().unwrap_or(&r1);
-            let comp = composition::composition(comp_target, cli.n_reads)?;
+            // Composition reads the cDNA (longer read of a pair); sex auto-selects its
+            // own reads (cDNA read for single-cell, both mates for paired-end bulk).
+            let cdna_read = match r2.as_deref() {
+                Some(r2p) => fastq::longer_read(&r1, r2p, 256)?,
+                None => &r1,
+            };
+            let comp = composition::composition(cdna_read, cli.n_reads)?;
+            let sx = sex::detect_sex_auto(&r1, r2.as_deref(), &cli.species, cli.sex_reads)?;
             let r = report::FullReport {
                 r1: r1.display().to_string(),
                 r2: r2.as_ref().map(|p| p.display().to_string()),
@@ -72,6 +89,7 @@ pub fn run() -> Result<()> {
                 bulk_vs_sc: bulk,
                 size: sz,
                 composition: comp,
+                sex: Some(sx),
             };
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
@@ -112,6 +130,16 @@ pub fn run() -> Result<()> {
                 c.print();
             }
         }
+        Cmd::Sex { r1, r2 } => {
+            // Auto-selects cDNA reads: the cDNA read for single-cell, both mates for
+            // paired-end bulk, or the sole file for single-end.
+            let s = sex::detect_sex_auto(&r1, r2.as_deref(), &cli.species, cli.sex_reads)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&s)?);
+            } else {
+                s.print();
+            }
+        }
         Cmd::DetectAssay { r1, r2 } => {
             let d = assaydetect::detect(&r1, &r2, cli.n_reads)?;
             if cli.json {
@@ -128,16 +156,13 @@ pub fn run() -> Result<()> {
                 println!("{} assays in catalogue:", cat.len());
                 for e in &cat {
                     let det = if e.detectable { "detect" } else { "  --  " };
-                    let label = if e.name.is_empty() {
-                        &e.assay_id
-                    } else {
-                        &e.name
-                    };
+                    let quant = if e.umi_based { "UMI" } else { "plate" };
                     println!(
-                        "  [{}] {:<26} {:<22} anchors={} ({})",
+                        "  [{}] {:<28} {:<24} {:<5} anchors={} ({})",
                         det,
+                        e.display_name,
                         e.spec_file.trim_end_matches(".spec.yaml"),
-                        label,
+                        quant,
                         e.anchors,
                         e.modalities.join(",")
                     );

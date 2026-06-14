@@ -38,6 +38,8 @@ const MIN_ANCHOR_LEN: usize = 6;
 pub struct AssayHit {
     pub spec_file: String,
     pub assay_id: String,
+    /// Human-friendly name with 3'/5' orientation, e.g. "10x 3' v3", "Smart-seq2".
+    pub display_name: String,
     pub name: String,
     pub modalities: Vec<String>,
     pub lib_struct: String,
@@ -50,6 +52,12 @@ pub struct AssayHit {
     pub anchors_total: usize,
     /// Total log-likelihood ratio (nats); higher is a better match.
     pub score: f64,
+    /// UMI-based (digital counts) vs plate-based / full-length (no UMI, read counts).
+    pub umi_based: bool,
+    /// Per-barcode onlist overlap `(cache_name, hit_rate)`, empty when no onlist was
+    /// loaded for this assay. Populated only when a barcode whitelist is cached.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub onlist_overlap: Vec<(String, f64)>,
 }
 
 /// Full generic-detection report for the `detect-assay` subcommand.
@@ -65,7 +73,8 @@ pub fn detect(r1: &Path, r2: &Path, n: usize) -> Result<DetectReport> {
     let (r1_seqs, _) = fastq::sample(r1, n)?;
     let (r2_seqs, _) = fastq::sample(r2, n)?;
     let assays = embedded_assays();
-    let hits = detect_assays(&r1_seqs, &r2_seqs, &assays, 5);
+    let sets = load_cached_onlists();
+    let hits = detect_assays(&r1_seqs, &r2_seqs, assays, &sets, 5);
 
     // Confidence from the per-read margin between the top two hits.
     let n_reads = r1_seqs.len().max(1) as f64;
@@ -102,11 +111,15 @@ pub fn detect(r1: &Path, r2: &Path, n: usize) -> Result<DetectReport> {
 pub struct CatalogueEntry {
     pub spec_file: String,
     pub assay_id: String,
+    /// Human-friendly name with 3'/5' orientation, e.g. "10x 3' v3", "CEL-seq2".
+    pub display_name: String,
     pub name: String,
     pub modalities: Vec<String>,
     pub detectable: bool,
     pub anchors: usize,
     pub lib_struct: String,
+    /// UMI-based (digital counts) vs plate-based / full-length (no UMI).
+    pub umi_based: bool,
 }
 
 /// List the embedded assay catalogue.
@@ -121,11 +134,13 @@ pub fn catalogue() -> Vec<CatalogueEntry> {
             CatalogueEntry {
                 spec_file: a.spec_file.clone(),
                 assay_id: a.assay_id.clone(),
+                display_name: pretty_name(&a.spec_file),
                 name: a.name.clone(),
                 modalities: a.modalities.clone(),
                 detectable,
                 anchors,
                 lib_struct: a.lib_struct.clone(),
+                umi_based: a.has_umi(),
             }
         })
         .collect();
@@ -135,13 +150,75 @@ pub fn catalogue() -> Vec<CatalogueEntry> {
 
 /// Find a catalogued assay by spec filename, its stem, or assay_id (case-insensitive).
 pub fn find_assay(query: &str) -> Option<Assay> {
-    embedded_assays().into_iter().find(|a| {
+    embedded_assays().iter().find(|a| {
         a.spec_file.eq_ignore_ascii_case(query)
             || a.spec_file
                 .trim_end_matches(".spec.yaml")
                 .eq_ignore_ascii_case(query)
             || a.assay_id.eq_ignore_ascii_case(query)
-    })
+    }).cloned()
+}
+
+/// Human-friendly display name for a catalogued assay, from its spec filename — with the
+/// 3'/5' orientation kept where it applies (e.g. `10x_rna_v3` → "10x 3' v3"). Falls back to
+/// a dash-cased stem for anything not in the curated table.
+pub fn pretty_name(spec_file: &str) -> String {
+    let stem = spec_file.trim_end_matches(".spec.yaml");
+    let known = match stem {
+        "10x_rna_v1" => "10x 3' v1",
+        "10x_rna_v2" => "10x 3' v2",
+        "10x_rna_v3" => "10x 3' v3",
+        "10x_rna_5prime" => "10x 5'",
+        "10xv3_scrnaseq_element_adept_truseq_dual" => "10x 3' v3 (Element AdeptTruSeq)",
+        "10xv3_scrnaseq_illumina_truseq_dual" => "10x 3' v3 (Illumina TruSeq)",
+        "10x_atac" => "10x ATAC",
+        "10xcrispr" => "10x CRISPR",
+        "10xfb_3prime" => "10x Feature Barcode 3'",
+        "10xfb_5prime" => "10x Feature Barcode 5'",
+        "10xfb_vdj_5prime" => "10x VDJ 5'",
+        "10x_rna_atac" => "10x RNA+ATAC",
+        "10x_rna_atac_multi" => "10x Multiome (RNA+ATAC)",
+        "bd_rhapsody_v1" => "BD Rhapsody",
+        "bd_rhapsody_eb" => "BD Rhapsody (Enhanced Bead)",
+        "cel_seq" => "CEL-seq",
+        "cel_seq2" => "CEL-seq2",
+        "dogmaseq_dig" => "DOGMA-seq (DIG)",
+        "dogmaseq_lll" => "DOGMA-seq (LLL)",
+        "drop_seq" => "Drop-seq",
+        "indropv2" => "inDrop v2",
+        "issaac_seq" => "ISSAAC-seq",
+        "mars_seq" => "MARS-seq",
+        "mcscrb_seq" => "mcSCRB-seq",
+        "microwell_seq" => "Microwell-seq",
+        "parse_wt_v2" => "Parse WT v2",
+        "pi_atac_seq" => "Pi-ATAC-seq",
+        "pipseqv2" => "PIP-seq v2",
+        "pipseqv3" => "PIP-seq v3",
+        "quartz_seq" => "Quartz-seq",
+        "quartz_seq2" => "Quartz-seq2",
+        "sccrispra" => "scCRISPR(a)",
+        "scifi_rna_seq" => "scifi-RNA-seq",
+        "sci_rna_seq" => "sci-RNA-seq",
+        "sci_rna_seq3" => "sci-RNA-seq3",
+        "seq_well" => "Seq-Well",
+        "seq_well_s3" => "Seq-Well S3",
+        "share_seq" => "SHARE-seq",
+        "smart_seq2" => "Smart-seq2",
+        "smart_seq3" => "Smart-seq3",
+        "sn_m3c_seq" => "sn-m3C-seq",
+        "snmctseq" => "snmC-seq",
+        "split_seq" => "SPLiT-seq",
+        "strt_seq" => "STRT-seq",
+        "strt_seq_2i" => "STRT-seq-2i",
+        "strt_seq_c1" => "STRT-seq-C1",
+        "sugarseq" => "SUGAR-seq",
+        "surecell" => "SureCell",
+        "tang2009" => "Tang 2009",
+        "vasa_seq_drop" => "VASA-seq (droplet)",
+        "vasa_seq_plate" => "VASA-seq (plate)",
+        _ => return stem.replace('_', "-"),
+    };
+    known.to_string()
 }
 
 /// A fixed motif expected at a known offset in the structural read.
@@ -222,12 +299,282 @@ fn score_obs(obs: &[Vec<u8>], expected_len: usize, anchors: &[Anchor]) -> (f64, 
     (total, found, dominant)
 }
 
+// Real barcodes land in the onlist ~70% of the time (error + ambient), wrong ones at
+// chance. Same model as the whitelist signal in chemistry.rs.
+const P_ONLIST_CORRECT: f64 = 0.70;
+const P_ONLIST_NULL: f64 = 0.01;
+
+/// A barcode region in the structural read backed by a fetchable onlist.
+#[derive(Debug, Clone)]
+pub struct OnlistSeg {
+    pub offset: usize,
+    /// `len..=max_len` give the lengths matched against the onlist; for a variable
+    /// barcode (inDrop bc1, 8-11 bp) they differ.
+    pub len: usize,
+    pub max_len: usize,
+    /// Cache name of the resolved onlist, the key into the loaded `sets` map.
+    pub filename: String,
+}
+
+/// A fetchable onlist: the mirror URL and the cache filename to store it under.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct OnlistSource {
+    /// Globally-unique cache filename (the spec's onlist names collide across assays).
+    pub cache_name: &'static str,
+    pub url: &'static str,
+}
+
+/// Onlist sources keyed by `(spec_file, onlist_filename_in_spec)`. seqspec carries no
+/// fetch URLs and its onlist filenames collide across assays, so each non-10x barcode
+/// list is mapped here to a hosted copy on the scg_lib_structs mirror. Assays not in
+/// this table stay geometry-only.
+const ONLIST_SOURCES: &[(&str, &str, OnlistSource)] = &[
+    (
+        "indropv2.spec.yaml",
+        "bc1_onlist.txt",
+        OnlistSource {
+            cache_name: "inDrop_barcode1_list.txt",
+            url: "https://teichlab.github.io/scg_lib_structs/data/inDrop/inDrop_barcode1_list.txt",
+        },
+    ),
+    // inDrop bc2 is dropped by the framing rule (downstream of variable bc1), so it is
+    // intentionally not listed here — it would only be fetched and never scored.
+    (
+        "bd_rhapsody_v1.spec.yaml",
+        "cls1_onlist.txt",
+        OnlistSource {
+            cache_name: "BD_CLS1.txt",
+            url: "https://teichlab.github.io/scg_lib_structs/data/BD/BD_CLS1.txt",
+        },
+    ),
+    (
+        "bd_rhapsody_v1.spec.yaml",
+        "cls2_onlist.txt",
+        OnlistSource {
+            cache_name: "BD_CLS2.txt",
+            url: "https://teichlab.github.io/scg_lib_structs/data/BD/BD_CLS2.txt",
+        },
+    ),
+    (
+        "bd_rhapsody_v1.spec.yaml",
+        "cls3_onlist.txt",
+        OnlistSource {
+            cache_name: "BD_CLS3.txt",
+            url: "https://teichlab.github.io/scg_lib_structs/data/BD/BD_CLS3.txt",
+        },
+    ),
+    (
+        "pipseqv2.spec.yaml",
+        "pip-seq_v2_bc1.tsv",
+        OnlistSource {
+            cache_name: "pip-seq_v2_bc1.tsv",
+            url: "https://teichlab.github.io/scg_lib_structs/data/PIP-seq/pip-seq_v2_bc1.tsv",
+        },
+    ),
+    (
+        "pipseqv2.spec.yaml",
+        "pip-seq_v2_bc2.tsv",
+        OnlistSource {
+            cache_name: "pip-seq_v2_bc2.tsv",
+            url: "https://teichlab.github.io/scg_lib_structs/data/PIP-seq/pip-seq_v2_bc2.tsv",
+        },
+    ),
+    (
+        "pipseqv2.spec.yaml",
+        "pip-seq_v2_bc3.tsv",
+        OnlistSource {
+            cache_name: "pip-seq_v2_bc3.tsv",
+            url: "https://teichlab.github.io/scg_lib_structs/data/PIP-seq/pip-seq_v2_bc3.tsv",
+        },
+    ),
+    (
+        "pipseqv3.spec.yaml",
+        "fb_v3_bc1.tsv",
+        OnlistSource {
+            cache_name: "fb_v3_bc1.tsv",
+            url: "https://teichlab.github.io/scg_lib_structs/data/PIP-seq/fb_v3_bc1.tsv",
+        },
+    ),
+    (
+        "pipseqv3.spec.yaml",
+        "fb_v3_bc2.tsv",
+        OnlistSource {
+            cache_name: "fb_v3_bc2.tsv",
+            url: "https://teichlab.github.io/scg_lib_structs/data/PIP-seq/fb_v3_bc2.tsv",
+        },
+    ),
+    (
+        "pipseqv3.spec.yaml",
+        "fb_v3_bc3.tsv",
+        OnlistSource {
+            cache_name: "fb_v3_bc3.tsv",
+            url: "https://teichlab.github.io/scg_lib_structs/data/PIP-seq/fb_v3_bc3.tsv",
+        },
+    ),
+    (
+        "pipseqv3.spec.yaml",
+        "fb_v3_bc4.tsv",
+        OnlistSource {
+            cache_name: "fb_v3_bc4.tsv",
+            url: "https://teichlab.github.io/scg_lib_structs/data/PIP-seq/fb_v3_bc4.tsv",
+        },
+    ),
+    (
+        "quartz_seq2.spec.yaml",
+        "cell_bc_onlist.txt",
+        OnlistSource {
+            cache_name: "Quartz-seq2_cell_barcodes.txt",
+            url: "https://teichlab.github.io/scg_lib_structs/data/Quartz-seq2_cell_barcodes.txt",
+        },
+    ),
+];
+
+/// Resolve a spec-local onlist filename to a fetchable source, or `None` if preflightx
+/// has no hosted copy for it (the assay stays geometry-only).
+fn onlist_source(spec_file: &str, onlist_filename: &str) -> Option<OnlistSource> {
+    ONLIST_SOURCES
+        .iter()
+        .find(|(s, f, _)| *s == spec_file && *f == onlist_filename)
+        .map(|(_, _, src)| *src)
+}
+
+/// Every distinct onlist source preflightx can fetch (for `fetch-whitelists`).
+pub fn onlist_fetch_list() -> Vec<OnlistSource> {
+    let mut seen = std::collections::HashSet::new();
+    ONLIST_SOURCES
+        .iter()
+        .filter(|(_, _, s)| seen.insert(s.cache_name))
+        .map(|(_, _, s)| *s)
+        .collect()
+}
+
+/// Load every cached onlist (keyed by cache name) so it can be scored. Files absent
+/// from the cache are skipped, leaving those assays geometry-only.
+#[cfg(not(target_arch = "wasm32"))]
+fn load_cached_onlists() -> std::collections::HashMap<String, std::collections::HashSet<Vec<u8>>> {
+    let mut sets = std::collections::HashMap::new();
+    let Ok(dir) = crate::whitelists::cache_dir() else {
+        return sets;
+    };
+    for src in onlist_fetch_list() {
+        let path = dir.join(src.cache_name);
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            sets.insert(src.cache_name.to_string(), parse_onlist(&text));
+        }
+    }
+    sets
+}
+
+#[cfg(target_arch = "wasm32")]
+fn load_cached_onlists() -> std::collections::HashMap<String, std::collections::HashSet<Vec<u8>>> {
+    let mut sets = std::collections::HashMap::new();
+    for src in onlist_fetch_list() {
+        // Key must match where `wasm::load_whitelist` stashes onlists.
+        let key = format!("{}/{}", crate::wasm::WL_DIR, src.cache_name);
+        if let Some(bytes) = fastq::vfs::get(&key) {
+            if let Ok(text) = std::str::from_utf8(bytes.as_ref()) {
+                sets.insert(src.cache_name.to_string(), parse_onlist(&text));
+            }
+        }
+    }
+    sets
+}
+
+/// One barcode per line (first whitespace/comma field), uppercased. Handles `.txt`
+/// and `.tsv`/`.csv` onlists; blank and comment lines are skipped.
+fn parse_onlist(text: &str) -> std::collections::HashSet<Vec<u8>> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| {
+            l.split(['\t', ','])
+                .next()
+                .unwrap_or(l)
+                .bytes()
+                .map(|b| b.to_ascii_uppercase())
+                .collect()
+        })
+        .collect()
+}
+
+/// Summed onlist-overlap LLR (nats) plus a per-segment `(filename, hit_rate)`. Each
+/// barcode is matched forward and reverse-complemented (sequencer-dependent), and at
+/// every length for variable-length barcodes; the better orientation is scored.
+/// Segments whose onlist is not loaded contribute nothing.
+fn onlist_overlap_llr(
+    obs: &[Vec<u8>],
+    segs: &[OnlistSeg],
+    sets: &std::collections::HashMap<String, std::collections::HashSet<Vec<u8>>>,
+) -> (f64, Vec<(String, f64)>) {
+    let mut total = 0.0_f64;
+    let mut per_seg = Vec::new();
+    for seg in segs {
+        let Some(set) = sets.get(&seg.filename) else {
+            continue;
+        };
+        let (mut eligible, mut fwd, mut rev) = (0usize, 0usize, 0usize);
+        for r in obs {
+            if r.len() < seg.offset + seg.len {
+                continue;
+            }
+            eligible += 1;
+            // A variable-length barcode matches at whichever length is on-list.
+            let mut hit_fwd = false;
+            let mut hit_rev = false;
+            for l in seg.len..=seg.max_len {
+                if r.len() < seg.offset + l {
+                    break;
+                }
+                let bc: Vec<u8> = r[seg.offset..seg.offset + l]
+                    .iter()
+                    .map(u8::to_ascii_uppercase)
+                    .collect();
+                hit_fwd |= set.contains(&bc);
+                hit_rev |= set.contains(&crate::sexpanel::revcomp(&bc));
+            }
+            fwd += hit_fwd as usize;
+            rev += hit_rev as usize;
+        }
+        if eligible == 0 {
+            continue;
+        }
+        let hits = fwd.max(rev);
+        total += bernoulli_llr(hits, eligible, P_ONLIST_CORRECT, P_ONLIST_NULL);
+        per_seg.push((seg.filename.clone(), hits as f64 / eligible as f64));
+    }
+    (total, per_seg)
+}
+
+/// Onlist segments for `a`, offset to align with the reads `score_obs` sees.
+/// `barcode_onlist_segments` counts from the first barcode/UMI, but the observed read
+/// (like `anchors_of`) counts from the layout start, so shift by the leading length.
+/// Keeps only segments with a hosted onlist, re-keyed to the cache name.
+fn resolved_onlist_segs(a: &Assay, layout: &[Segment]) -> Vec<OnlistSeg> {
+    let leading: usize = layout
+        .iter()
+        .take_while(|s| !crate::libstruct::is_barcode_or_umi(&s.region_type))
+        .map(|s| s.len)
+        .sum();
+    crate::libstruct::barcode_onlist_segments_of(layout)
+        .into_iter()
+        .filter_map(|(off, len, max_len, local)| {
+            onlist_source(&a.spec_file, &local).map(|src| OnlistSeg {
+                offset: leading + off,
+                len,
+                max_len,
+                filename: src.cache_name.to_string(),
+            })
+        })
+        .collect()
+}
+
 /// Rank catalogued assays by how well the observed reads match each one. The two
 /// input files are tried in both orientations (either can carry the barcode read).
 pub fn detect_assays(
     r1: &[Vec<u8>],
     r2: &[Vec<u8>],
     assays: &[Assay],
+    sets: &std::collections::HashMap<String, std::collections::HashSet<Vec<u8>>>,
     max_hits: usize,
 ) -> Vec<AssayHit> {
     let mut hits: Vec<AssayHit> = Vec::new();
@@ -238,13 +585,17 @@ pub fn detect_assays(
         };
         let expected: usize = layout.iter().map(|s| s.len).sum();
         let anchors = anchors_of(&layout);
+        let onlist_segs = resolved_onlist_segs(a, &layout);
 
         let mut best: Option<AssayHit> = None;
         for (orient, obs) in [("r1=barcode", r1), ("r2=barcode", r2)] {
-            let (score, found, dom) = score_obs(obs, expected, &anchors);
+            let (mut score, found, dom) = score_obs(obs, expected, &anchors);
+            let (ol_llr, overlap) = onlist_overlap_llr(obs, &onlist_segs, sets);
+            score += ol_llr;
             let candidate = AssayHit {
                 spec_file: a.spec_file.clone(),
                 assay_id: a.assay_id.clone(),
+                display_name: pretty_name(&a.spec_file),
                 name: a.name.clone(),
                 modalities: a.modalities.clone(),
                 lib_struct: a.lib_struct.clone(),
@@ -255,6 +606,8 @@ pub fn detect_assays(
                 anchors_found: found,
                 anchors_total: anchors.len(),
                 score,
+                umi_based: a.has_umi(),
+                onlist_overlap: overlap,
             };
             if best
                 .as_ref()
@@ -292,24 +645,45 @@ impl DetectReport {
             println!("  no catalogued assay matched the reads.");
             return;
         }
+        let q = if self.hits[0].umi_based {
+            "UMI-based (digital molecule counts)".green()
+        } else {
+            "plate-based / full-length — no UMI (read counts)".yellow()
+        };
+        println!("  {} {}", "QUANTIFICATION (top candidate):".bold(), q);
         println!("  {}", "ranked candidates:".bold());
         for (i, h) in self.hits.iter().enumerate() {
             let marker = if i == 0 { "→".green() } else { " ".normal() };
-            let label = if h.name.is_empty() {
-                &h.assay_id
-            } else {
-                &h.name
-            };
             println!(
-                "    {} {:<28} score={:>8.1}  anchors={}/{}  {} (exp {}bp, obs {}bp)",
+                "    {} {:<26} score={:>8.1}  anchors={}/{}  {} (exp {}bp, obs {}bp)",
                 marker,
-                label,
+                h.display_name,
                 h.score,
                 h.anchors_found,
                 h.anchors_total,
                 h.orientation,
                 h.expected_len,
                 h.observed_len,
+            );
+        }
+        let top = &self.hits[0];
+        if !top.onlist_overlap.is_empty() {
+            let parts: Vec<String> = top
+                .onlist_overlap
+                .iter()
+                .map(|(f, rate)| format!("{f} {:.0}%", rate * 100.0))
+                .collect();
+            println!(
+                "  {} {}",
+                "Onlist overlap (top candidate):".bold(),
+                parts.join(", ")
+            );
+        }
+        if let Some(a) = find_assay(&top.spec_file) {
+            println!(
+                "  {} {}",
+                "STARsolo (top candidate):".bold(),
+                crate::libstruct::starsolo(&a)
             );
         }
     }
@@ -357,12 +731,27 @@ pub fn describe(a: &Assay) -> String {
             }
         }
     }
+    s.push_str(&format!("STARsolo: {}\n", crate::libstruct::starsolo(a)));
     s
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pretty_names_with_orientation() {
+        assert_eq!(pretty_name("10x_rna_v3.spec.yaml"), "10x 3' v3");
+        assert_eq!(pretty_name("10x_rna_5prime.spec.yaml"), "10x 5'");
+        assert_eq!(pretty_name("smart_seq2.spec.yaml"), "Smart-seq2");
+        assert_eq!(pretty_name("cel_seq2.spec.yaml"), "CEL-seq2");
+        assert_eq!(pretty_name("split_seq.spec.yaml"), "SPLiT-seq");
+        // every catalogued spec yields a non-empty, non-underscored display name
+        for e in catalogue() {
+            assert!(!e.display_name.is_empty());
+            assert!(!e.display_name.contains('_'), "{}", e.display_name);
+        }
+    }
 
     /// Build one synthetic read matching a structural layout: fixed segments use
     /// their real sequence, variable barcode/UMI segments are filled with A's
@@ -391,7 +780,7 @@ mod tests {
         let r2: Vec<Vec<u8>> = (0..500).map(|_| synth_read(&layout)).collect();
         let r1: Vec<Vec<u8>> = (0..500).map(|_| vec![b'C'; 100]).collect();
 
-        let hits = detect_assays(&r1, &r2, &assays, 5);
+        let hits = detect_assays(&r1, &r2, assays, &Default::default(), 5);
         assert!(!hits.is_empty());
         let top = &hits[0];
         assert_eq!(
@@ -408,6 +797,310 @@ mod tests {
     }
 
     #[test]
+    fn onlist_overlap_rewards_in_whitelist_barcodes() {
+        use std::collections::{HashMap, HashSet};
+        // A small onlist of four 8 bp barcodes.
+        let bcs = [
+            b"AAAACCCC".to_vec(),
+            b"GGGGTTTT".to_vec(),
+            b"ACGTACGT".to_vec(),
+            b"TGCATGCA".to_vec(),
+        ];
+        let set: HashSet<Vec<u8>> = bcs.iter().cloned().collect();
+        let mut sets = HashMap::new();
+        sets.insert("bc1.txt".to_string(), set);
+
+        // 200 reads: an on-list barcode at offset 0, then 12 bp of filler.
+        let obs: Vec<Vec<u8>> = (0..200)
+            .map(|i| {
+                let mut r = bcs[i % bcs.len()].clone();
+                r.extend_from_slice(b"GGGGGGGGGGGG");
+                r
+            })
+            .collect();
+        let segs = vec![OnlistSeg {
+            offset: 0,
+            len: 8,
+            max_len: 8,
+            filename: "bc1.txt".into(),
+        }];
+
+        let (llr, per_seg) = onlist_overlap_llr(&obs, &segs, &sets);
+        assert!(
+            llr > 50.0,
+            "on-list barcodes should give a strong positive LLR, got {llr}"
+        );
+        assert_eq!(per_seg.len(), 1);
+        assert!(per_seg[0].1 > 0.9, "hit rate ~1.0, got {}", per_seg[0].1);
+    }
+
+    #[test]
+    fn onlist_overlap_ignores_off_whitelist_and_missing_sets() {
+        use std::collections::{HashMap, HashSet};
+        let set: HashSet<Vec<u8>> = [b"AAAACCCC".to_vec(), b"GGGGTTTT".to_vec()]
+            .into_iter()
+            .collect();
+        let mut sets = HashMap::new();
+        sets.insert("bc1.txt".to_string(), set);
+
+        // Barcodes absent from the onlist score a strongly negative LLR.
+        let obs: Vec<Vec<u8>> = (0..200).map(|_| b"TTTTTTTTNNNNNNNNNNNN".to_vec()).collect();
+        let segs = vec![OnlistSeg {
+            offset: 0,
+            len: 8,
+            max_len: 8,
+            filename: "bc1.txt".into(),
+        }];
+        let (llr, _) = onlist_overlap_llr(&obs, &segs, &sets);
+        assert!(
+            llr < -200.0,
+            "200 off-list reads should be strongly penalized, got {llr}"
+        );
+
+        // A segment whose onlist was never fetched contributes nothing.
+        let missing = vec![OnlistSeg {
+            offset: 0,
+            len: 8,
+            max_len: 8,
+            filename: "absent.txt".into(),
+        }];
+        let (llr0, per_seg0) = onlist_overlap_llr(&obs, &missing, &sets);
+        assert_eq!(llr0, 0.0);
+        assert!(per_seg0.is_empty());
+    }
+
+    #[test]
+    fn onlist_overlap_matches_reverse_complement_orientation() {
+        use std::collections::{HashMap, HashSet};
+        // Onlist stores forward barcodes; reads carry their reverse complement
+        // (some sequencers do this for inDrop). Overlap must still fire.
+        let set: HashSet<Vec<u8>> = [b"AAAACCCC".to_vec(), b"ACGTACGT".to_vec()]
+            .into_iter()
+            .collect();
+        let mut sets = HashMap::new();
+        sets.insert("bc1.txt".to_string(), set);
+
+        let rc = [b"GGGGTTTT".to_vec(), b"ACGTACGT".to_vec()];
+        let obs: Vec<Vec<u8>> = (0..200)
+            .map(|i| {
+                let mut r = rc[i % rc.len()].clone();
+                r.extend_from_slice(b"GGGGGGGGGGGG");
+                r
+            })
+            .collect();
+        let segs = vec![OnlistSeg {
+            offset: 0,
+            len: 8,
+            max_len: 8,
+            filename: "bc1.txt".into(),
+        }];
+        let (llr, _) = onlist_overlap_llr(&obs, &segs, &sets);
+        assert!(llr > 50.0, "revcomp barcodes should still match, got {llr}");
+    }
+
+    #[test]
+    fn parse_onlist_handles_columns_comments_and_case() {
+        let text = "AAAA\nCCCC\tnote\nGGGG,desc\n# a comment\n\n   tttt  \n";
+        let set = parse_onlist(text);
+        let mut got: Vec<Vec<u8>> = set.into_iter().collect();
+        got.sort();
+        let mut want = vec![
+            b"AAAA".to_vec(),
+            b"CCCC".to_vec(),
+            b"GGGG".to_vec(),
+            b"TTTT".to_vec(),
+        ];
+        want.sort();
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn onlist_overlap_matches_variable_length_barcodes() {
+        use std::collections::{HashMap, HashSet};
+        // inDrop bc1 is 8-11 bp: the onlist holds full-length barcodes, reads carry
+        // whichever length, so a fixed 8 bp window would miss the 9-11 bp ones.
+        let set: HashSet<Vec<u8>> = [
+            b"AAAAAAAA".to_vec(),
+            b"CCCCCCCCC".to_vec(),
+            b"GGGGGGGGGG".to_vec(),
+        ]
+        .into_iter()
+        .collect();
+        let mut sets = HashMap::new();
+        sets.insert("bc1.txt".to_string(), set);
+
+        let bcs = [
+            b"AAAAAAAA".to_vec(),
+            b"CCCCCCCCC".to_vec(),
+            b"GGGGGGGGGG".to_vec(),
+        ];
+        let obs: Vec<Vec<u8>> = (0..300)
+            .map(|i| {
+                let mut r = bcs[i % bcs.len()].clone();
+                r.extend_from_slice(b"TTTTTTTTTTTT");
+                r
+            })
+            .collect();
+        let segs = vec![OnlistSeg {
+            offset: 0,
+            len: 8,
+            max_len: 10,
+            filename: "bc1.txt".into(),
+        }];
+        let (_, per_seg) = onlist_overlap_llr(&obs, &segs, &sets);
+        assert!(
+            per_seg[0].1 > 0.95,
+            "variable-length barcodes should nearly all match, got {}",
+            per_seg[0].1
+        );
+    }
+
+    #[test]
+    fn detect_assays_boosts_score_with_cached_onlist() {
+        use std::collections::{HashMap, HashSet};
+        let assays = embedded_assays();
+        let indrop = assays
+            .iter()
+            .find(|a| a.spec_file == "indropv2.spec.yaml")
+            .unwrap();
+        let (_, layout) = indrop.structural_read().unwrap();
+
+        // inDrop barcode read is R2; synth_read fills every barcode region with 'A'.
+        let r2: Vec<Vec<u8>> = (0..500).map(|_| synth_read(&layout)).collect();
+        let r1: Vec<Vec<u8>> = (0..500).map(|_| vec![b'C'; 100]).collect();
+
+        let find = |hits: &[AssayHit]| {
+            hits.iter()
+                .find(|h| h.spec_file == "indropv2.spec.yaml")
+                .cloned()
+                .unwrap()
+        };
+        let without = find(&detect_assays(&r1, &r2, assays, &HashMap::new(), 60));
+
+        // bc1 (the only framed barcode) is all-A in the synth reads; an onlist holding
+        // that barcode boosts the score. bc2 is dropped (downstream of variable bc1).
+        let a_set: HashSet<Vec<u8>> = [b"AAAAAAAA".to_vec()].into_iter().collect();
+        let mut sets = HashMap::new();
+        sets.insert("inDrop_barcode1_list.txt".to_string(), a_set);
+        let with = find(&detect_assays(&r1, &r2, assays, &sets, 60));
+
+        assert!(
+            with.score > without.score + 100.0,
+            "onlist overlap should raise the score: {} vs {}",
+            with.score,
+            without.score
+        );
+        assert_eq!(
+            with.onlist_overlap.len(),
+            1,
+            "only the framed bc1 is scored"
+        );
+        assert!(with.onlist_overlap.iter().all(|(_, r)| *r > 0.9));
+        assert!(without.onlist_overlap.is_empty());
+
+        // A cached onlist of barcodes the reads carry in neither orientation (the synth
+        // bc1 is AAAAAAAA, revcomp TTTTTTTT) must not raise the rank.
+        let wrong: HashSet<Vec<u8>> = [b"GGGGGGGG".to_vec()].into_iter().collect();
+        let mut wrong_sets = HashMap::new();
+        wrong_sets.insert("inDrop_barcode1_list.txt".to_string(), wrong);
+        let mismatch = find(&detect_assays(&r1, &r2, assays, &wrong_sets, 60));
+        assert!(
+            mismatch.score <= without.score,
+            "off-list barcodes must not boost: {} vs {}",
+            mismatch.score,
+            without.score
+        );
+    }
+
+    #[test]
+    fn detect_assays_scores_all_framed_barcodes() {
+        use std::collections::{HashMap, HashSet};
+        // BD Rhapsody has three fixed 9 bp barcodes with no variable region among them,
+        // so all three are framed and scored (unlike inDrop, where bc2 is dropped).
+        let assays = embedded_assays();
+        let bd = assays
+            .iter()
+            .find(|a| a.spec_file == "bd_rhapsody_v1.spec.yaml")
+            .unwrap();
+        let (_, layout) = bd.structural_read().unwrap();
+        let r1: Vec<Vec<u8>> = (0..500).map(|_| synth_read(&layout)).collect();
+        let r2: Vec<Vec<u8>> = (0..500).map(|_| vec![b'G'; 60]).collect();
+
+        let a9: HashSet<Vec<u8>> = [b"AAAAAAAAA".to_vec()].into_iter().collect();
+        let mut sets = HashMap::new();
+        for f in ["BD_CLS1.txt", "BD_CLS2.txt", "BD_CLS3.txt"] {
+            sets.insert(f.to_string(), a9.clone());
+        }
+        let hit = detect_assays(&r1, &r2, assays, &sets, 60)
+            .into_iter()
+            .find(|h| h.spec_file == "bd_rhapsody_v1.spec.yaml")
+            .unwrap();
+        assert_eq!(hit.onlist_overlap.len(), 3, "all three cls barcodes scored");
+        assert!(hit.onlist_overlap.iter().all(|(_, r)| *r > 0.9));
+    }
+
+    #[test]
+    fn onlist_sources_resolve_per_assay_and_are_unique() {
+        // inDrop bc1 resolves; bc2 is intentionally absent (dropped by the framing rule).
+        let bc1 = onlist_source("indropv2.spec.yaml", "bc1_onlist.txt").unwrap();
+        assert!(bc1.url.starts_with("https://"));
+        assert!(onlist_source("indropv2.spec.yaml", "bc2_onlist.txt").is_none());
+
+        // The other wired assays resolve each barcode to a distinct hosted file.
+        for (spec, local) in [
+            ("bd_rhapsody_v1.spec.yaml", "cls1_onlist.txt"),
+            ("bd_rhapsody_v1.spec.yaml", "cls2_onlist.txt"),
+            ("bd_rhapsody_v1.spec.yaml", "cls3_onlist.txt"),
+            ("pipseqv2.spec.yaml", "pip-seq_v2_bc1.tsv"),
+            ("pipseqv2.spec.yaml", "pip-seq_v2_bc3.tsv"),
+            ("pipseqv3.spec.yaml", "fb_v3_bc1.tsv"),
+            ("pipseqv3.spec.yaml", "fb_v3_bc4.tsv"),
+            ("quartz_seq2.spec.yaml", "cell_bc_onlist.txt"),
+        ] {
+            let src = onlist_source(spec, local)
+                .unwrap_or_else(|| panic!("{spec}/{local} should resolve"));
+            assert!(src.url.starts_with("https://"), "{spec}/{local}");
+        }
+        // The same spec-local onlist name (cell_bc_onlist.txt) is used by other specs,
+        // so resolution must be keyed per assay, not by filename alone.
+        assert!(onlist_source("drop_seq.spec.yaml", "cell_bc_onlist.txt").is_none());
+
+        // Unframeable / non-barcode-list assays stay geometry-only.
+        assert!(onlist_source("split_seq.spec.yaml", "barcode-1_onlist.txt").is_none());
+        assert!(onlist_source("bd_rhapsody_eb.spec.yaml", "cls1_onlist.txt").is_none());
+        assert!(onlist_source("indropv2.spec.yaml", "nope.txt").is_none());
+
+        // Cache names are globally unique, so the loaded-set map never collides.
+        let mut seen = std::collections::HashSet::new();
+        for (_, _, src) in ONLIST_SOURCES {
+            assert!(
+                seen.insert(src.cache_name),
+                "dup cache_name {}",
+                src.cache_name
+            );
+        }
+    }
+
+    #[test]
+    fn onlist_sources_reference_the_live_catalogue() {
+        // Each entry keys on strings from the vendored seqspec YAML. A submodule bump
+        // that renames a spec or onlist would otherwise silently degrade an assay to
+        // geometry-only; this turns that into a red test.
+        let assays = embedded_assays();
+        for (spec, local, _) in ONLIST_SOURCES {
+            let a = assays
+                .iter()
+                .find(|a| a.spec_file == *spec)
+                .unwrap_or_else(|| panic!("{spec} not in embedded catalogue"));
+            let found = a
+                .leaf_regions()
+                .iter()
+                .any(|r| r.onlist.as_ref().map(|o| o.filename.as_str()) == Some(*local));
+            assert!(found, "{spec} has no onlist named {local}");
+        }
+    }
+
+    #[test]
     fn exact_geometry_outranks_within_tolerance() {
         // A 28 bp barcode read (10x v3/v4 geometry) with no linkers should rank an
         // exact-length assay above one that is merely within the ±tolerance window
@@ -417,7 +1110,7 @@ mod tests {
             .map(|i| (0..28).map(|j| b"ACGT"[(i + j) % 4]).collect())
             .collect();
         let r2: Vec<Vec<u8>> = (0..300).map(|_| vec![b'G'; 90]).collect();
-        let hits = detect_assays(&r1, &r2, &assays, 10);
+        let hits = detect_assays(&r1, &r2, assays, &Default::default(), 10);
         assert_eq!(
             hits[0].expected_len, 28,
             "top hit should match the exact 28bp geometry, got {}bp ({})",
@@ -480,7 +1173,7 @@ mod tests {
         // assays of identical geometry and no anchors).
         let assays = embedded_assays();
         let mut checked = 0;
-        for a in &assays {
+        for a in assays {
             let Some((_rid, layout)) = a.structural_read() else {
                 continue;
             };
@@ -490,7 +1183,7 @@ mod tests {
             }
             let r1: Vec<Vec<u8>> = (0..300).map(|_| synth_read(&layout)).collect();
             let r2: Vec<Vec<u8>> = (0..300).map(|_| vec![b'G'; 90]).collect();
-            let hits = detect_assays(&r1, &r2, &assays, assays.len());
+            let hits = detect_assays(&r1, &r2, assays, &Default::default(), assays.len());
             let top = hits[0].score;
             let ours = hits
                 .iter()

@@ -22,20 +22,21 @@ fn http_client() -> &'static reqwest::blocking::Client {
 /// analysis layer is shared with the native build with no signature changes.
 #[cfg(target_arch = "wasm32")]
 pub mod vfs {
+    use std::sync::Arc;
     use std::cell::RefCell;
     use std::collections::HashMap;
 
     thread_local! {
-        static FILES: RefCell<HashMap<String, Vec<u8>>> = RefCell::new(HashMap::new());
+        static FILES: RefCell<HashMap<String, Arc<[u8]>>> = RefCell::new(HashMap::new());
     }
 
     /// Store `bytes` (raw file contents, possibly gzipped) under `name`.
     pub fn put(name: &str, bytes: Vec<u8>) {
-        FILES.with(|f| f.borrow_mut().insert(name.to_string(), bytes));
+        FILES.with(|f| f.borrow_mut().insert(name.to_string(), Arc::from(bytes)));
     }
 
     /// Fetch a stored buffer by name, if present.
-    pub fn get(name: &str) -> Option<Vec<u8>> {
+    pub fn get(name: &str) -> Option<Arc<[u8]>> {
         FILES.with(|f| f.borrow().get(name).cloned())
     }
 
@@ -114,10 +115,8 @@ fn open(path: &Path) -> Result<Box<dyn FastxReader>> {
     }
 }
 
-/// Pull the next record, or `None` at end of stream. A parse error becomes `None`
-/// on wasm — a Range-sliced remote gzip can truncate its final record, so we keep
-/// what was already read — but stays a hard error on native.
-#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+/// Pull the next record, or `None` at end of stream. Parse errors always surface
+/// as hard errors: callers should never mistake malformed FASTQ for clean EOF.
 fn next_record<'a>(
     reader: &'a mut dyn FastxReader,
     path: &Path,
@@ -125,13 +124,7 @@ fn next_record<'a>(
     match reader.next() {
         Some(Ok(r)) => Ok(Some(r)),
         None => Ok(None),
-        Some(Err(_e)) => {
-            #[cfg(target_arch = "wasm32")]
-            return Ok(None);
-            #[cfg(not(target_arch = "wasm32"))]
-            return Err(anyhow::Error::new(_e))
-                .with_context(|| format!("parsing {}", path.display()));
-        }
+        Some(Err(e)) => Err(anyhow::Error::new(e)).with_context(|| format!("parsing {}", path.display())),
     }
 }
 
@@ -153,8 +146,11 @@ where
     Ok(seen)
 }
 
+/// Owned sampled reads: `(sequences, qualities)`.
+pub type SampledReads = (Vec<Vec<u8>>, Vec<Vec<u8>>);
+
 /// Collect first `n` sequences and (optionally) their qualities as owned Vecs.
-pub fn sample(path: &Path, n: usize) -> Result<(Vec<Vec<u8>>, Vec<Vec<u8>>)> {
+pub fn sample(path: &Path, n: usize) -> Result<SampledReads> {
     let mut seqs = Vec::with_capacity(n);
     let mut quals = Vec::with_capacity(n);
     for_each_record(path, n, |seq, q| {
@@ -164,6 +160,26 @@ pub fn sample(path: &Path, n: usize) -> Result<(Vec<Vec<u8>>, Vec<Vec<u8>>)> {
         }
     })?;
     Ok((seqs, quals))
+}
+
+/// Of two read files, the one whose first `probe` reads are longer on average — i.e. the
+/// cDNA insert rather than the short barcode/UMI read. Assay-agnostic (works for 10x,
+/// Parse, Drop-seq, …); ties (e.g. paired full-length reads) return `a`.
+pub fn longer_read<'a>(a: &'a Path, b: &'a Path, probe: usize) -> Result<&'a Path> {
+    fn mean_len(p: &Path, probe: usize) -> Result<f64> {
+        let mut total = 0u64;
+        let mut n = 0u64;
+        for_each_record(p, probe, |seq, _| {
+            total += seq.len() as u64;
+            n += 1;
+        })?;
+        Ok(if n == 0 { 0.0 } else { total as f64 / n as f64 })
+    }
+    Ok(if mean_len(a, probe)? >= mean_len(b, probe)? {
+        a
+    } else {
+        b
+    })
 }
 
 /// Stream paired reads from two FASTQ files in batches of `batch_size`.
@@ -189,16 +205,22 @@ where
         let mut b2: Vec<Vec<u8>> = Vec::with_capacity(batch_size);
 
         while b1.len() < batch_size && total < n_max {
-            let s1 = match next_record(r1_rd.as_mut(), r1)? {
-                Some(r) => r.seq().to_vec(),
-                None => break,
-            };
-            let s2 = match next_record(r2_rd.as_mut(), r2)? {
-                Some(r) => r.seq().to_vec(),
-                None => break,
-            };
-            b1.push(s1);
-            b2.push(s2);
+            let s1 = next_record(r1_rd.as_mut(), r1)?;
+            let s2 = next_record(r2_rd.as_mut(), r2)?;
+            match (s1, s2) {
+                (Some(s1), Some(s2)) => {
+                    b1.push(s1.seq().to_vec());
+                    b2.push(s2.seq().to_vec());
+                }
+                (None, None) => break,
+                _ => {
+                    anyhow::bail!(
+                        "paired FASTQ inputs ended at different lengths: {} and {} are out of sync",
+                        r1.display(),
+                        r2.display()
+                    );
+                }
+            }
             total += 1;
         }
 
@@ -226,4 +248,23 @@ pub fn mean_phred(qual: &[u8]) -> f64 {
 /// Round to 2 decimal places for report output.
 pub(crate) fn round2(x: f64) -> f64 {
     (x * 100.0).round() / 100.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::write_fastq;
+
+    #[test]
+    fn paired_stream_rejects_mismatched_mate_lengths() {
+        let r1 = write_fastq("fastq_pair_r1", &[vec![b'A'; 20], vec![b'C'; 20]]);
+        let r2 = write_fastq("fastq_pair_r2", &[vec![b'G'; 20]]);
+        let err = stream_paired_batched(&r1, &r2, 10, 10, |_, _| true).unwrap_err();
+        std::fs::remove_file(&r1).ok();
+        std::fs::remove_file(&r2).ok();
+        assert!(
+            err.to_string().contains("out of sync"),
+            "unexpected error: {err:#}"
+        );
+    }
 }

@@ -3,6 +3,7 @@ use serde::Serialize;
 
 use crate::chemistry::ChemReport;
 use crate::composition::CompositionReport;
+use crate::sex::SexReport;
 use crate::size::{BulkReport, SizeReport};
 
 #[derive(Serialize)]
@@ -13,23 +14,18 @@ pub struct FullReport {
     pub bulk_vs_sc: BulkReport,
     pub size: SizeReport,
     pub composition: CompositionReport,
+    /// `None` when sex inference was not requested; serializes to no `sex` key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sex: Option<SexReport>,
 }
 
 impl FullReport {
     pub fn print(&self) {
-        println!(
-            "{}",
-            "============================================================".dimmed()
-        );
         println!("{}", "preflightx full report".bold().bright_blue());
         println!("  R1: {}", self.r1);
         if let Some(r2) = &self.r2 {
             println!("  R2: {}", r2);
         }
-        println!(
-            "{}",
-            "============================================================".dimmed()
-        );
         println!();
         if let Some(chem) = &self.chemistry {
             chem.print();
@@ -41,9 +37,84 @@ impl FullReport {
         println!();
         self.composition.print();
         println!();
-        println!(
-            "{}",
-            "============================================================".dimmed()
+        if let Some(sex) = &self.sex {
+            sex.print();
+            println!();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::composition::CompositionReport;
+    use crate::size::{BulkReport, PerFileSize, SizeReport};
+
+    fn minimal(sex: Option<SexReport>) -> FullReport {
+        FullReport {
+            r1: "r1".into(),
+            r2: None,
+            chemistry: None,
+            bulk_vs_sc: BulkReport {
+                r1_length_dominant: 28,
+                r1_length_stddev: 0.0,
+                r1_length_distribution: vec![(28, 100)],
+                verdict: "single-cell",
+                confidence: "high",
+                notes: vec![],
+            },
+            size: SizeReport {
+                r1: PerFileSize {
+                    path: "r1".into(),
+                    n_reads_sampled: 100,
+                    mean_length: 28.0,
+                    mean_phred: 35.0,
+                    low_qual_pct: 0.0,
+                },
+                r2: None,
+                adequate_for_sc: true,
+                notes: vec![],
+            },
+            composition: CompositionReport {
+                gc_pct: 50.0,
+                n_pct: 0.0,
+                base_pct: [25.0; 5],
+                low_complexity_pct: 0.0,
+                homopolymer_pct: 0.0,
+                guess_organism_family: "unknown",
+                is_barcode_read: false,
+                notes: vec![],
+            },
+            sex,
+        }
+    }
+
+    #[test]
+    fn omits_sex_when_not_requested() {
+        // A `None` sex serializes to a report with no `sex` key.
+        let json = serde_json::to_string(&minimal(None)).unwrap();
+        assert!(
+            !json.contains("\"sex\""),
+            "expected no sex key when sex is None, got: {json}"
         );
+    }
+
+    #[test]
+    fn includes_sex_when_requested() {
+        let sx = SexReport {
+            species: "human".into(),
+            panel_status: "validated".into(),
+            verdict: "female".into(),
+            confidence: "high".into(),
+            reads_scanned: 200_000,
+            y_hit_reads: 1,
+            xist_hit_reads: 40,
+            y_xist_ratio: 0.02,
+            y_per_gene: vec![],
+            mixed_sex_suspected: false,
+            notes: vec![],
+        };
+        let json = serde_json::to_string(&minimal(Some(sx))).unwrap();
+        assert!(json.contains("\"sex\""), "expected sex key, got: {json}");
     }
 }

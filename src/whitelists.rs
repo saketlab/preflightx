@@ -39,21 +39,16 @@ pub fn fetch_all() -> Result<()> {
         .timeout(std::time::Duration::from_secs(900))
         .build()?;
     let mut any_failed = false;
+    // 10x whitelists are large; a partial file under 1 MB is treated as not cached.
     for wl in &whitelists {
-        let target = dir.join(wl.filename);
-        if target.exists() && fs::metadata(&target)?.len() > 1_000_000 {
-            println!("  [{}] {} -- already cached", wl.filename, "skip".dimmed());
-            continue;
-        }
-        print!("  [{}] downloading ... ", wl.filename);
-        std::io::stdout().flush()?;
-        match download_one(&client, wl.url, &target) {
-            Ok(n) => println!("{} ({} MB)", "ok".green(), n / (1024 * 1024)),
-            Err(e) => {
-                any_failed = true;
-                println!("{} ({})", "failed".red(), e);
-            }
-        }
+        let cached = dir.join(wl.filename).exists()
+            && fs::metadata(dir.join(wl.filename))?.len() > 1_000_000;
+        any_failed |= !fetch_into(&client, &dir, wl.filename, wl.url, cached)?;
+    }
+    // Non-10x barcode onlists for `detect-assay`: small plain-text lists.
+    for src in crate::assaydetect::onlist_fetch_list() {
+        let cached = dir.join(src.cache_name).exists();
+        any_failed |= !fetch_into(&client, &dir, src.cache_name, src.url, cached)?;
     }
     println!();
     if any_failed {
@@ -67,6 +62,37 @@ pub fn fetch_all() -> Result<()> {
     }
     println!("Cache directory: {}", dir.display());
     Ok(())
+}
+
+/// Download `name` into `dir` unless already `cached`, printing one status line.
+/// Returns `false` only on a download failure (so callers can track `any_failed`).
+fn fetch_into(
+    client: &reqwest::blocking::Client,
+    dir: &Path,
+    name: &str,
+    url: &str,
+    cached: bool,
+) -> Result<bool> {
+    if cached {
+        println!("  [{}] {} -- already cached", name, "skip".dimmed());
+        return Ok(true);
+    }
+    print!("  [{name}] downloading ... ");
+    std::io::stdout().flush()?;
+    match download_one(client, url, &dir.join(name)) {
+        Ok(n) if n >= 1024 * 1024 => {
+            println!("{} ({} MB)", "ok".green(), n / (1024 * 1024));
+            Ok(true)
+        }
+        Ok(n) => {
+            println!("{} ({} KB)", "ok".green(), (n / 1024).max(1));
+            Ok(true)
+        }
+        Err(e) => {
+            println!("{} ({})", "failed".red(), e);
+            Ok(false)
+        }
+    }
 }
 
 fn download_one(client: &reqwest::blocking::Client, url: &str, target: &Path) -> Result<usize> {

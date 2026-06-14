@@ -152,6 +152,24 @@
     .bar-legend { margin-left: 0; }
   }
   .vmain.warn { color: var(--insert); }
+  .sexrow { display: flex; align-items: center; gap: 14px; margin-top: 10px; flex-wrap: wrap;
+            padding-top: 10px; border-top: 1px dashed var(--line); width: 100%; }
+  .sexopt { display: inline-flex; align-items: center; gap: 8px; color: var(--fg);
+            font-size: 14px; cursor: pointer; }
+  .sexopt input { width: 16px; height: 16px; min-height: 0; accent-color: var(--accent); cursor: pointer; }
+  .sexadv { display: inline-flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .sexadv[hidden] { display: none; }
+  .sexadv select { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+                   border-radius: 6px; padding: 7px 9px; font: inherit; min-height: 44px; }
+  .sexnote { color: var(--muted); font-size: 12px; font-style: italic; flex-basis: 100%; }
+  .sexblock { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .sexblock h3 { margin: 0 0 8px; font-family: var(--ui); font-size: 15px; color: var(--fg); font-weight: 600; }
+  .sexverdict { font-family: var(--ui); font-size: 20px; font-weight: 600; }
+  .sexverdict.male { color: var(--accent); }
+  .sexverdict.female { color: var(--insert); }
+  .sexverdict.uncertain { color: var(--warn); }
+  .sexverdict.unknown { color: var(--muted); }
+  .sexcaveat { color: var(--muted); font-size: 12.5px; margin-top: 8px; }
   .controls { display: flex; align-items: center; gap: 14px; margin-top: 16px; flex-wrap: wrap; }
   label.n { color: var(--muted); font-size: 14px; }
   input[type=number] {
@@ -194,7 +212,7 @@
   .why-toggle:hover { text-decoration: underline; }
   summary:hover { color: var(--fg); }
   button:focus-visible, .tab:focus-visible, .drop:focus-visible,
-  input:focus-visible, textarea:focus-visible, summary:focus-visible {
+  input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
     outline: 2px solid var(--accent); outline-offset: 2px;
   }
   button:not(.sec):focus-visible, .tab.active:focus-visible { outline-color: var(--fg); }
@@ -224,12 +242,12 @@
         <div class="drop" id="drop1" role="button" tabindex="0">
           <div class="lbl">R1 (barcode read)</div>
           <div class="file" id="file1">drop a .fastq / .fastq.gz here, or click</div>
-          <input type="file" id="in1" accept=".fastq,.fq,.gz,.fastq.gz,.fq.gz" />
+          <input type="file" id="in1" accept=".fastq,.fq,.gz,.fastq.gz,.fq.gz" aria-label="R1 barcode-read FASTQ file" />
         </div>
         <div class="drop" id="drop2" role="button" tabindex="0">
-          <div class="lbl">R2 (cDNA read)</div>
+          <div class="lbl">R2 (cDNA read) <span class="hint">optional</span></div>
           <div class="file" id="file2">drop a .fastq / .fastq.gz here, or click</div>
-          <input type="file" id="in2" accept=".fastq,.fq,.gz,.fastq.gz,.fq.gz" />
+          <input type="file" id="in2" accept=".fastq,.fq,.gz,.fastq.gz,.fq.gz" aria-label="R2 cDNA-read FASTQ file (optional)" />
         </div>
       </div>
     </div>
@@ -241,7 +259,7 @@
           <textarea id="ta1" aria-labelledby="lblTa1" spellcheck="false" placeholder="@read1&#10;ACGT...&#10;+&#10;IIII..."></textarea>
         </div>
         <div style="flex: 1 1 260px;">
-          <p class="ta-lbl" id="lblTa2">R2 (cDNA read) <span class="hint">plain-text FASTQ</span></p>
+          <p class="ta-lbl" id="lblTa2">R2 (cDNA read) <span class="hint">optional</span></p>
           <textarea id="ta2" aria-labelledby="lblTa2" spellcheck="false" placeholder="@read1&#10;ACGT...&#10;+&#10;IIII..."></textarea>
         </div>
       </div>
@@ -266,19 +284,34 @@
 
     <div class="controls">
       <label class="n">reads to sample <input type="number" id="nreads" value="50000" min="1000" step="1000" /></label>
-      <button id="btnCheck" disabled>Run full check</button>
-      <button id="btnAssay" class="sec" disabled>Detect assay</button>
+      <button id="btnCheck" disabled hidden>Run full check</button>
+      <button id="btnAssay" class="sec" disabled hidden>Detect assay</button>
+      <div class="sexrow">
+        <label class="sexopt">
+          <input type="checkbox" id="sexToggle" />
+          also infer genetic sex
+        </label>
+        <span class="sexadv" id="sexAdv" hidden>
+          <label class="n">species <select id="sexSpecies"></select></label>
+          <label class="n">sex reads <input type="number" id="sexReads" value="200000" min="1000" step="10000" /></label>
+        </span>
+        <span class="sexnote">
+          Optional. Counts Y-gene + XIST transcripts: a sample-level signal, not a clinical call.
+          Runs entirely in your browser; no reads are uploaded.
+        </span>
+      </div>
     </div>
     <div class="status" id="status" role="status" aria-live="polite">loading analyzer…</div>
   </div>
 
   <div class="card verdict" id="verdict">
     <h2 class="vhead" id="vhead">Result</h2>
-    <div class="vmain" id="vmain">—</div>
+    <div class="vmain" id="vmain">–</div>
     <div id="vconf"></div>
     <div id="vtrack"></div>
     <div class="grid" id="vgrid"></div>
     <div class="plots" id="vplots"></div>
+    <div class="sexblock" id="vsex" hidden></div>
     <div class="why" id="vwhy"></div>
     <details>
       <summary>Raw JSON</summary>
@@ -294,7 +327,7 @@
 </footer>
 
 <script type="module">
-import init, { check, detect_assay, needed_whitelists, load_whitelist } from './pkg/preflightx.js';
+import init, { check, detect_assay, needed_whitelists, load_whitelist, onlist_sources, sex, sex_species } from './pkg/preflightx.js';
 
 // preflightx samples the first N reads, so we only read the leading slice.
 const SLICE_BYTES = 48 * 1024 * 1024;
@@ -317,14 +350,16 @@ const els = {
   paneAcc: document.getElementById('paneAcc'),
   accInput: document.getElementById('accInput'), btnFetchRuns: document.getElementById('btnFetchRuns'),
   accStatus: document.getElementById('accStatus'), runsWrap: document.getElementById('runsWrap'),
-  controls: document.querySelector('.controls'),
   nreads: document.getElementById('nreads'),
+  sexToggle: document.getElementById('sexToggle'), sexAdv: document.getElementById('sexAdv'),
+  sexSpecies: document.getElementById('sexSpecies'), sexReads: document.getElementById('sexReads'),
   btnCheck: document.getElementById('btnCheck'), btnAssay: document.getElementById('btnAssay'),
   status: document.getElementById('status'),
   verdict: document.getElementById('verdict'), vhead: document.getElementById('vhead'),
   vmain: document.getElementById('vmain'), vconf: document.getElementById('vconf'),
   vtrack: document.getElementById('vtrack'), vplots: document.getElementById('vplots'),
   vgrid: document.getElementById('vgrid'), vwhy: document.getElementById('vwhy'),
+  vsex: document.getElementById('vsex'),
   raw: document.getElementById('raw'),
 };
 let f1 = null, f2 = null, ready = false, mode = 'acc';
@@ -335,13 +370,17 @@ function setStatus(msg, isErr) {
   els.status.setAttribute('aria-live', isErr ? 'assertive' : 'polite');
 }
 function haveInputs() {
-  if (mode === 'paste') return els.ta1.value.trim() && els.ta2.value.trim();
-  return f1 && f2;
+  if (mode === 'paste') return !!els.ta1.value.trim();
+  return !!f1;
+}
+// Chemistry and assay detection need both reads; R1 alone is enough otherwise.
+function havePair() {
+  if (mode === 'paste') return !!(els.ta1.value.trim() && els.ta2.value.trim());
+  return !!(f1 && f2);
 }
 function refresh() {
-  const ok = ready && haveInputs();
-  els.btnCheck.disabled = !ok;
-  els.btnAssay.disabled = !ok;
+  els.btnCheck.disabled = !(ready && haveInputs());
+  els.btnAssay.disabled = !(ready && havePair());
 }
 
 const MODES = [
@@ -356,14 +395,15 @@ function setMode(next) {
     m.pane.classList.toggle('active', m.mode === next);
   }
   const acc = next === 'acc';
-  els.controls.style.display = acc ? 'none' : '';
+  els.btnCheck.hidden = acc;
+  els.btnAssay.hidden = acc;
   els.verdict.style.display = acc ? 'none' : '';
   refresh();
 }
 for (const m of MODES) m.tab.addEventListener('click', () => setMode(m.mode));
 els.ta1.addEventListener('input', refresh);
 els.ta2.addEventListener('input', refresh);
-setMode('acc'); // accession is the default tab
+setMode('acc');
 for (const chip of document.querySelectorAll('.examples .ex')) {
   chip.addEventListener('click', () => { els.accInput.value = chip.dataset.acc; fetchRuns(); });
 }
@@ -395,11 +435,29 @@ async function gatherBytes() {
   if (mode === 'paste') {
     return [encoder.encode(els.ta1.value), encoder.encode(els.ta2.value)];
   }
-  return Promise.all([readHead(f1), readHead(f2)]);
+  return Promise.all([readHead(f1), f2 ? readHead(f2) : new Uint8Array(0)]);
 }
 
-// Fetch matching onlists (host first, then the scg_lib_structs mirror). All failures
-// are non-fatal: chemistry falls back to geometry + TSO.
+// Fetch barcode lists in parallel and stash each in wasm memory, once per session.
+// Each entry tries its urls in order; all failures are non-fatal (detection falls
+// back to geometry + anchors).
+async function fetchAndLoad(entries) {
+  await Promise.all(entries.map(async ({ name, urls }) => {
+    if (wlLoaded.has(name)) return;
+    for (const url of urls) {
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) continue;
+        load_whitelist(name, new Uint8Array(await resp.arrayBuffer()));
+        wlLoaded.add(name);
+        return;
+      } catch {
+      }
+    }
+  }));
+}
+
+// 10x whitelists matching the read geometry (for chem), host first then mirror.
 async function ensureWhitelists(b1, b2, n) {
   let needed;
   try {
@@ -407,19 +465,18 @@ async function ensureWhitelists(b1, b2, n) {
   } catch {
     return;
   }
-  for (const name of needed) {
-    if (wlLoaded.has(name)) continue;
-    for (const url of [`${WL_PATH}/${name}`, `${WL_MIRROR}/${name}`]) {
-      try {
-        const resp = await fetch(url);
-        if (!resp.ok) continue;
-        load_whitelist(name, new Uint8Array(await resp.arrayBuffer()));
-        wlLoaded.add(name);
-        break;
-      } catch {
-      }
-    }
+  await fetchAndLoad(needed.map(name => ({ name, urls: [`${WL_PATH}/${name}`, `${WL_MIRROR}/${name}`] })));
+}
+
+// Non-10x barcode onlists detect-assay can score (inDrop, BD, PIP-seq, ...).
+async function ensureOnlists() {
+  let srcs;
+  try {
+    srcs = JSON.parse(onlist_sources());
+  } catch {
+    return;
   }
+  await fetchAndLoad(srcs.map(({ cache_name, url }) => ({ name: cache_name, urls: [`${WL_PATH}/${cache_name}`, url] })));
 }
 
 function pill(conf) {
@@ -592,16 +649,20 @@ function renderTrack(el, chem) {
 
 function renderCheck(r, ms) {
   const chem = r.chemistry || {};
+  // No chemistry => a single read was uploaded (chemistry needs both mates).
+  const singleEnd = !r.chemistry;
   const notSc = chem.is_single_cell === false;
-  els.vhead.textContent = 'Chemistry';
-  els.vmain.textContent = notSc ? 'Not single-cell' : (chem.assay_display || chem.assay_id || 'unknown');
-  els.vmain.classList.toggle('warn', notSc);
-  els.vconf.innerHTML = notSc ? '' : pill(chem.confidence);
+  els.vhead.textContent = singleEnd ? 'Single read' : 'Chemistry';
+  els.vmain.textContent = singleEnd
+    ? 'Single-end / bulk input'
+    : (notSc ? 'Not single-cell' : (chem.assay_display || chem.assay_id || 'unknown'));
+  els.vmain.classList.toggle('warn', notSc && !singleEnd);
+  els.vconf.innerHTML = (singleEnd || notSc) ? '' : pill(chem.confidence);
   const g = [];
   if (!notSc && chem.cb_len != null) g.push(stat('barcode geometry', `CB ${chem.cb_len} + UMI ${chem.umi_len} (${chem.cb_read})`));
   if (chem.r1_length_dominant != null) g.push(stat('R1 dominant len', chem.r1_length_dominant + ' bp'));
   if (chem.reads_sampled != null) g.push(stat('reads used', (+chem.reads_sampled).toLocaleString()));
-  if (r.bulk_vs_sc) g.push(stat('library', r.bulk_vs_sc.verdict || '—'));
+  if (r.bulk_vs_sc) g.push(stat('library', r.bulk_vs_sc.verdict || '–'));
   if (r.size && r.size.r1) g.push(stat('mean PHRED', r.size.r1.mean_phred));
   if (r.composition) g.push(stat('GC %', r.composition.gc_pct));
   if (r.composition) g.push(stat('organism hint', r.composition.guess_organism_family));
@@ -610,7 +671,51 @@ function renderCheck(r, ms) {
   els.vgrid.innerHTML = g.join('');
   renderTrack(els.vtrack, chem);
   renderPlots(els.vplots, r);
-  renderWhy(els.vwhy, chem);
+  renderSex(els.vsex, r.sex);
+  if (singleEnd) {
+    els.vwhy.innerHTML = '<div class="why-notes">One file: ran bulk-vs-single-cell, size, composition'
+      + (r.sex ? ', and genetic sex' : '')
+      + '. Chemistry and assay detection need both reads (R1 + R2).</div>';
+  } else {
+    renderWhy(els.vwhy, chem);
+  }
+}
+
+// Opt-in genetic sex, run only when the toggle is on, with its own deeper sampling.
+// `setMsg` reports progress (status line or table cell). Returns the report or undefined.
+async function runSex(b1, b2, setMsg) {
+  if (!els.sexToggle.checked) return undefined;
+  const sn = Math.max(1000, parseInt(els.sexReads.value, 10) || 200000);
+  setMsg(`inferring genetic sex (first ${sn.toLocaleString()} reads)…`);
+  await new Promise(res => setTimeout(res, 0));
+  return JSON.parse(sex(b1, b2, els.sexSpecies.value, sn));
+}
+
+function renderSex(el, s) {
+  if (!s) { el.hidden = true; el.innerHTML = ''; return; }
+  // Whitelist the verdict before it reaches the unescaped class attribute below.
+  const v = ['male', 'female', 'uncertain', 'unknown'].includes(s.verdict) ? s.verdict : 'unknown';
+  const ratio = s.y_xist_ratio != null ? (+s.y_xist_ratio).toFixed(2) : '–';
+  const ledger = (s.y_per_gene || []).map(([g, c]) => `${escapeHtml(g)}:${c}`).join(', ');
+  const caveats = [];
+  if (s.panel_status && s.panel_status !== 'validated')
+    caveats.push(`Panel for ${escapeHtml(s.species)} is ${escapeHtml(s.panel_status)}; interpret with care.`);
+  if (s.mixed_sex_suspected)
+    caveats.push('Both Y and XIST signals strong; pooled both-sex sample or XXY?');
+  for (const n of (s.notes || [])) caveats.push(escapeHtml(n));
+  el.innerHTML = `
+    <h3>Genetic sex <span style="color:var(--muted);font-weight:400;font-size:13px">· opt-in, sample-level signal</span></h3>
+    <div><span class="sexverdict ${v}">${escapeHtml(v)}</span> &nbsp; ${pill(s.confidence)}</div>
+    <div class="grid" style="margin-top:12px">
+      ${stat('species', escapeHtml(s.species) + (s.panel_status ? ` (${escapeHtml(s.panel_status)})` : ''))}
+      ${stat('Y-panel hits', s.y_hit_reads ?? '–')}
+      ${stat('XIST hits', s.xist_hit_reads ?? '–')}
+      ${stat('Y/XIST ratio', ratio)}
+      ${stat('reads scanned', (+(s.reads_scanned || 0)).toLocaleString())}
+      ${ledger ? stat(`Y genes hit (${s.y_per_gene.length})`, ledger) : ''}
+    </div>
+    ${caveats.length ? `<div class="sexcaveat">${caveats.map(c => `· ${c}`).join('<br>')}</div>` : ''}`;
+  el.hidden = false;
 }
 function renderAssay(r, ms) {
   const top = (r.hits && r.hits[0]) || {};
@@ -628,6 +733,12 @@ function renderAssay(r, ms) {
   els.vgrid.innerHTML = g.join('');
   els.vtrack.innerHTML = '';
   els.vplots.innerHTML = '';
+  const overlap = top.onlist_overlap || [];
+  if (overlap.length) {
+    const rows = overlap.map(([name, rate], i) =>
+      bar(name.replace(/\.(txt|tsv|csv)$/, ''), rate, i === 0 ? 'var(--cb)' : 'var(--linker)', (rate * 100).toFixed(0) + '%')).join('');
+    els.vplots.innerHTML += `<h3>Barcode onlist overlap</h3>${rows}`;
+  }
   const legend = 'Every catalogued seqspec assay is scored by read-geometry match plus fixed linker anchors, tried in both R1/R2 orientations; the highest summed log-likelihood (nats) wins.';
   // When the best score is negative or confidence is low, the "winner" is just the
   // least-bad fit; say so rather than implying a real match.
@@ -641,25 +752,33 @@ function renderAssay(r, ms) {
 async function run(kind) {
   els.btnCheck.disabled = els.btnAssay.disabled = true;
   els.verdict.classList.remove('show');
+  els.vsex.hidden = true;
   try {
     setStatus(mode === 'paste' ? 'reading pasted reads…' : 'reading files…');
     const [b1, b2] = await gatherBytes();
     const n = Math.max(1000, parseInt(els.nreads.value, 10) || 50000);
-    if (kind === 'check') {
+    if (kind === 'check' && b2.length) {
       setStatus('fetching barcode onlist…');
       await ensureWhitelists(b1, b2, n);
+    } else if (kind === 'assay' && b2.length) {
+      setStatus('fetching barcode onlists…');
+      await ensureOnlists();
     }
     setStatus(`analyzing first ${n.toLocaleString()} reads…`);
     // Yield so the status paints before the synchronous wasm call.
     await new Promise(r => setTimeout(r, 0));
     const t0 = performance.now();
     const json = kind === 'check' ? check(b1, b2, n) : detect_assay(b1, b2, n);
-    const ms = performance.now() - t0;
     const r = JSON.parse(json);
+    if (kind === 'check') {
+      const sx = await runSex(b1, b2, setStatus);
+      if (sx) r.sex = sx;
+    }
+    const ms = performance.now() - t0;
     els.raw.textContent = JSON.stringify(r, null, 2);
     (kind === 'check' ? renderCheck : renderAssay)(r, ms);
     els.verdict.classList.add('show');
-    setStatus(`done — analyzed in ${fmtDur(ms)}.`);
+    setStatus(`done, analyzed in ${fmtDur(ms)}.`);
   } catch (e) {
     setStatus('error: ' + (e && e.message ? e.message : e), true);
   } finally {
@@ -669,7 +788,22 @@ async function run(kind) {
 els.btnCheck.addEventListener('click', () => run('check'));
 els.btnAssay.addEventListener('click', () => run('assay'));
 
-// ---- "From accession" tab: pull runs from seqout.org and check them ----------
+els.sexToggle.addEventListener('change', () => {
+  els.sexAdv.hidden = !els.sexToggle.checked;
+});
+// Skip mechanisms the decision rule can't yet call; flag experimental panels.
+function populateSexSpecies() {
+  let panels = [];
+  try { panels = JSON.parse(sex_species()); } catch { /* leave empty */ }
+  const opts = panels
+    .filter(p => p.mechanism === 'XY_XIST')
+    .map(p => `<option value="${escapeHtml(p.species)}">${escapeHtml(p.species)}${p.status !== 'validated' ? ' (experimental)' : ''}</option>`);
+  els.sexSpecies.innerHTML = opts.join('');
+  // Keep the opt-in visible; only disable it if a build genuinely ships no panel.
+  els.sexToggle.disabled = !opts.length;
+}
+
+// "From accession" tab: pull a study's runs from seqout.org and check each.
 
 const SEQOUT_API = 'https://seqout.org/api';
 // Per-run we fetch only the leading bytes over an HTTP Range request. ENA's https
@@ -725,19 +859,20 @@ function firstStudy(field) {
   return null;
 }
 
-// fastq_ftp is a ";"-separated list of host/paths (R1 then R2). Prefix https and
-// pick the barcode/cDNA pair; preflightx auto-orients, so order is best-effort.
-function pickPair(fastqFtp) {
+// fastq_ftp is a ";"-separated list of host/paths. Prefix https and pick the read(s):
+// the cDNA/barcode pair when present, or a single read for single-end runs.
+function pickReads(fastqFtp) {
   let urls = (fastqFtp || '').split(';').map(s => s.trim()).filter(Boolean)
     .map(p => p.startsWith('http') ? p : 'https://' + p);
   // Drop sample-index reads (I1/I2): short, not barcode or cDNA. A 10x run is often
   // listed as I1;R1;R2, and the index would otherwise be mistaken for R1.
   const noIndex = urls.filter(u => !/_I[12][._]/i.test(u));
-  if (noIndex.length >= 2) urls = noIndex;
-  if (urls.length < 2) return null;
+  if (noIndex.length >= 1) urls = noIndex;
+  if (urls.length === 0) return null;
+  if (urls.length === 1) return [urls[0]];
   const r1 = urls.find(u => /_1\.|_R1[._]/i.test(u)) || urls[0];
   const r2 = urls.find(u => u !== r1 && /_2\.|_R2[._]/i.test(u)) || urls.find(u => u !== r1);
-  return r2 ? [r1, r2] : null;
+  return r2 ? [r1, r2] : [r1];
 }
 
 async function fetchSlice(url) {
@@ -751,7 +886,7 @@ async function fetchSlice(url) {
 }
 
 async function runOne(ctx) {
-  if (!ctx.pair) return;
+  if (!ctx.reads) return;
   const n = Math.max(1000, parseInt(els.nreads.value, 10) || 50000);
   ctx.btn.disabled = true;
   ctx.resCell.classList.remove('err');
@@ -759,18 +894,27 @@ async function runOne(ctx) {
   ctx.detailTr.hidden = true;
   ctx.why.innerHTML = '';
   try {
-    const [b1, b2] = await Promise.all([fetchSlice(ctx.pair[0]), fetchSlice(ctx.pair[1])]);
+    const bufs = await Promise.all(ctx.reads.map(fetchSlice));
+    const b1 = bufs[0];
+    const b2 = bufs[1] || new Uint8Array(0);
     ctx.resCell.textContent = 'analyzing…';
-    await ensureWhitelists(b1, b2, n);
+    if (b2.length) await ensureWhitelists(b1, b2, n);
     await new Promise(r => setTimeout(r, 0));
     const t0 = performance.now();
     const r = JSON.parse(check(b1, b2, n));
+    const sx = await runSex(b1, b2, m => { ctx.resCell.textContent = m; });
+    if (sx) r.sex = sx;
     const ms = performance.now() - t0;
     const c = r.chemistry || {};
+    const singleEnd = !r.chemistry;
+    const sampled = c.reads_sampled ?? r.size?.r1?.n_reads_sampled ?? 0;
     // Flag a short sample only on a truncated fetch, not when the detector early-stopped.
-    const truncated = c.reads_sampled < n && !c.early_stop;
-    const reads = `<span style="color:var(--muted)"> · ${c.reads_sampled.toLocaleString()} reads${truncated ? ' (input ended early)' : ''} · ${fmtDur(ms)}</span>`;
-    if (c.is_single_cell === false) {
+    const truncated = sampled < n && !c.early_stop;
+    const reads = `<span style="color:var(--muted)"> · ${(+sampled).toLocaleString()} reads${truncated ? ' (input ended early)' : ''} · ${fmtDur(ms)}</span>`;
+    if (singleEnd) {
+      const lib = r.bulk_vs_sc && r.bulk_vs_sc.verdict ? r.bulk_vs_sc.verdict : 'single read';
+      ctx.resCell.innerHTML = `<span style="color:var(--muted)">single-end · ${escapeHtml(lib)}</span>${reads}`;
+    } else if (c.is_single_cell === false) {
       ctx.resCell.innerHTML =
         `<span style="color:var(--warn);font-weight:650">Not single-cell</span> ` +
         `<span style="color:var(--muted)">R1 ${c.r1_length_dominant}bp, no barcode geometry</span>${reads}`;
@@ -782,9 +926,16 @@ async function runOne(ctx) {
     ctx.why.replaceChildren();
     const trackDiv = document.createElement('div'); ctx.why.append(trackDiv); renderTrack(trackDiv, c);
     const plotsDiv = document.createElement('div'); plotsDiv.className = 'plots'; ctx.why.append(plotsDiv); renderPlots(plotsDiv, r);
+    const sexDiv = document.createElement('div'); sexDiv.className = 'sexblock'; ctx.why.append(sexDiv); renderSex(sexDiv, r.sex);
     const whyDiv = document.createElement('div'); ctx.why.append(whyDiv);
-    const L = chemLedger(c);
-    renderLedger(whyDiv, L.steps, L.legend, L.notes);
+    if (singleEnd) {
+      whyDiv.innerHTML = '<div class="why-notes">Single-end run: ran bulk/size/composition'
+        + (r.sex ? ' and genetic sex' : '')
+        + '. Chemistry and assay detection need paired reads.</div>';
+    } else {
+      const L = chemLedger(c);
+      renderLedger(whyDiv, L.steps, L.legend, L.notes);
+    }
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'why-toggle';
@@ -820,21 +971,21 @@ function renderRunsTable(study, data, runs) {
 
   const table = document.createElement('table');
   table.className = 'runs';
-  table.innerHTML = '<thead><tr><th>run</th><th>layout</th><th>FASTQ</th><th><span class="sr-only">action</span></th><th>result</th></tr></thead>';
+  table.innerHTML = '<thead><tr><th scope="col">run</th><th scope="col">layout</th><th scope="col">FASTQ</th><th scope="col"><span class="sr-only">action</span></th><th scope="col">result</th></tr></thead>';
   const tb = document.createElement('tbody');
   const ctxs = [];
   for (const run of runs) {
-    const pair = pickPair(run.fastq_ftp);
+    const reads = pickReads(run.fastq_ftp);
     const tr = document.createElement('tr');
     const tdAcc = document.createElement('td'); tdAcc.className = 'acc'; tdAcc.textContent = run.run_accession;
-    const tdLay = document.createElement('td'); tdLay.textContent = (run.library_layout || '—').toLowerCase();
+    const tdLay = document.createElement('td'); tdLay.textContent = (run.library_layout || '–').toLowerCase();
     const tdFiles = document.createElement('td');
     tdFiles.style.cssText = 'font-size:12px;color:var(--muted)';
-    tdFiles.textContent = pair ? pair.map(u => u.split('/').pop()).join('  +  ') : 'no paired FASTQ';
+    tdFiles.textContent = reads ? reads.map(u => u.split('/').pop()).join('  +  ') : 'no FASTQ';
     const tdBtn = document.createElement('td');
     const btn = document.createElement('button'); btn.className = 'run sec'; btn.textContent = 'Run';
     const tdRes = document.createElement('td'); tdRes.className = 'res';
-    if (!pair) { btn.disabled = true; tdRes.textContent = 'single-end'; }
+    if (!reads) { btn.disabled = true; tdRes.textContent = 'no FASTQ'; }
     tdBtn.append(btn);
     tr.append(tdAcc, tdLay, tdFiles, tdBtn, tdRes);
     const detailTr = document.createElement('tr'); detailTr.className = 'detail'; detailTr.hidden = true;
@@ -842,7 +993,7 @@ function renderRunsTable(study, data, runs) {
     const why = document.createElement('div'); why.className = 'why';
     detailTd.append(why); detailTr.append(detailTd);
     tb.append(tr, detailTr);
-    const ctx = { run, pair, btn, resCell: tdRes, detailTr, why, soleRun: runs.length === 1 };
+    const ctx = { run, reads, btn, resCell: tdRes, detailTr, why, soleRun: runs.length === 1 };
     ctxs.push(ctx);
     btn.addEventListener('click', () => runOne(ctx));
   }
@@ -857,10 +1008,42 @@ function renderRunsTable(study, data, runs) {
     // Sequential on purpose: each run streams MBs from ENA and holds a slice plus
     // the onlist in wasm memory, so we don't fan out and spike memory/bandwidth.
     for (const ctx of ctxs) {
-      if (ctx.pair) await runOne(ctx);
+      if (ctx.reads) await runOne(ctx);
     }
     runAll.disabled = false;
   });
+}
+
+const ORGANISM_SPECIES = { 'homo sapiens': 'human', 'mus musculus': 'mouse' };
+function clearAutoSpecies() {
+  [...els.sexSpecies.options].filter(o => o.dataset.auto).forEach(o => o.remove());
+}
+// Preselect the sex-panel species from the run's organism (seqout chain:
+// run → experiment → sample). An organism with no bundled panel is added as a
+// "(no panel)" option and selected, so the check honestly reports no panel rather
+// than silently scanning with the human one. Best-effort; failures leave it as-is.
+async function autoSelectSpecies(run) {
+  try {
+    if (!run || !run.experiment_accession) return;
+    const exp = await apiJson(`/experiment/${run.experiment_accession}`);
+    const samp = (exp.samples || [])[0];
+    const acc = typeof samp === 'string' ? samp : (samp && samp.accession);
+    if (!acc) return;
+    const name = (await apiJson(`/sample/${acc}`)).scientific_name || '';
+    if (!name) return;
+    clearAutoSpecies();
+    const species = ORGANISM_SPECIES[name.toLowerCase()];
+    if (species && els.sexSpecies.querySelector(`option[value="${species}"]`)) {
+      els.sexSpecies.value = species;
+      els.accStatus.textContent += ` · ${name} → ${species}`;
+    } else {
+      const opt = new Option(`${name} (no panel)`, name);
+      opt.dataset.auto = '1';
+      els.sexSpecies.add(opt);
+      els.sexSpecies.value = name;
+      els.accStatus.textContent += ` · ${name}: no sex panel (human/mouse only)`;
+    }
+  } catch { /* best-effort */ }
 }
 
 async function fetchRuns() {
@@ -869,8 +1052,6 @@ async function fetchRuns() {
   els.btnFetchRuns.disabled = true;
   els.runsWrap.replaceChildren();
   try {
-    // A run accession (SRR/ERR/DRR) is checked on its own; anything else resolves
-    // to a study and lists its runs.
     if (RUN_RE.test(raw.toUpperCase())) {
       accStatus(`fetching ${raw.toUpperCase()}…`);
       const run = await apiJson(`/run/${raw.toUpperCase()}`);
@@ -878,6 +1059,7 @@ async function fetchRuns() {
       const data = { total_runs: 1, paired_runs: paired ? 1 : 0, single_runs: paired ? 0 : 1 };
       renderRunsTable(run.study_accession || run.run_accession, data, [run]);
       accStatus(`run ${run.run_accession}${run.study_accession ? ` (study ${run.study_accession})` : ''}`);
+      autoSelectSpecies(run);
       return;
     }
     accStatus(`resolving ${raw}…`);
@@ -889,6 +1071,7 @@ async function fetchRuns() {
     renderRunsTable(study, data, runs);
     const shown = runs.length < data.total_runs ? ` (showing first ${runs.length})` : '';
     accStatus(`${data.total_runs} run(s) in ${study}${shown}`);
+    autoSelectSpecies(runs[0]);
   } catch (e) {
     accStatus('error: ' + (e && e.message ? e.message : e), true);
   } finally {
@@ -901,6 +1084,7 @@ els.accInput.addEventListener('keydown', e => { if (e.key === 'Enter') fetchRuns
 (async () => {
   try {
     await init();
+    populateSexSpecies();
     ready = true;
     setStatus('analyzer ready.');
     refresh();
