@@ -296,8 +296,7 @@
           <label class="n">sex reads <input type="number" id="sexReads" value="200000" min="1000" step="10000" /></label>
         </span>
         <span class="sexnote">
-          Optional. Counts Y-gene + XIST transcripts: a sample-level signal, not a clinical call.
-          Runs entirely in your browser; no reads are uploaded.
+          Optional. Counts Y-gene + XIST transcripts.
         </span>
       </div>
     </div>
@@ -1014,14 +1013,11 @@ function renderRunsTable(study, data, runs) {
   });
 }
 
-const ORGANISM_SPECIES = { 'homo sapiens': 'human', 'mus musculus': 'mouse' };
 function clearAutoSpecies() {
   [...els.sexSpecies.options].filter(o => o.dataset.auto).forEach(o => o.remove());
 }
-// Preselect the sex-panel species from the run's organism (seqout chain:
-// run → experiment → sample). An organism with no bundled panel is added as a
-// "(no panel)" option and selected, so the check honestly reports no panel rather
-// than silently scanning with the human one. Best-effort; failures leave it as-is.
+// Panel option values are common names, so resolve scientific -> common via
+// seqout /common-name and select the panel by that.
 async function autoSelectSpecies(run) {
   try {
     if (!run || !run.experiment_accession) return;
@@ -1031,19 +1027,24 @@ async function autoSelectSpecies(run) {
     if (!acc) return;
     const name = (await apiJson(`/sample/${acc}`)).scientific_name || '';
     if (!name) return;
+    let common = '';
+    try {
+      const hits = await apiJson(`/common-name?scientific_name=${encodeURIComponent(name)}`);
+      common = (hits[0] && hits[0].common_name || '').toLowerCase();
+    } catch {}
     clearAutoSpecies();
-    const species = ORGANISM_SPECIES[name.toLowerCase()];
-    if (species && els.sexSpecies.querySelector(`option[value="${species}"]`)) {
-      els.sexSpecies.value = species;
-      els.accStatus.textContent += ` · ${name} → ${species}`;
+    if (common && els.sexSpecies.querySelector(`option[value="${common}"]`)) {
+      els.sexSpecies.value = common;
+      els.accStatus.insertAdjacentText('beforeend', ` · ${name} → ${common}`);
     } else {
       const opt = new Option(`${name} (no panel)`, name);
       opt.dataset.auto = '1';
       els.sexSpecies.add(opt);
       els.sexSpecies.value = name;
-      els.accStatus.textContent += ` · ${name}: no sex panel (human/mouse only)`;
+      els.accStatus.insertAdjacentHTML('beforeend',
+        ` · <span style="color:var(--bad)">${escapeHtml(name)}: no sex panel (human/mouse only)</span>`);
     }
-  } catch { /* best-effort */ }
+  } catch {}
 }
 
 async function fetchRuns() {
