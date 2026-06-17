@@ -108,10 +108,10 @@ fn bulk_wgs_reads_are_not_single_cell() {
         report
             .interpretation
             .last()
-            .is_some_and(|e| e.signal == "Verdict" && e.conclusion.contains("not single-cell")),
-        "reasoning should end on a not-single-cell verdict"
+            .is_some_and(|e| e.signal == "Verdict" && e.conclusion.contains("detect-assay")),
+        "reasoning should end on a not-10x verdict that points at detect-assay"
     );
-    assert!(report.notes.iter().any(|n| n.contains("not single-cell")));
+    assert!(report.notes.iter().any(|n| n.contains("detect-assay")));
 }
 
 #[test]

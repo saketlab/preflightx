@@ -66,13 +66,14 @@ pub(crate) fn build_report(
     let mut notes: Vec<String> = Vec::new();
     if !is_single_cell {
         notes.push(format!(
-            "No single-cell signal detected: R1 is {dominant}bp (single-cell barcode reads are typically ~24-30bp), \
+            "No 10x/Drop-seq signal detected: R1 is {dominant}bp (10x barcode reads are ~24-30bp), \
              TSO appears in {tso_pct:.0}% of R2 (background ~1%), and whitelist overlap is {max_wl_pct:.0}%. \
-             This looks like bulk or genomic sequencing, not single-cell."
+             This is not a 10x or Drop-seq library. It may be bulk/genomic, or another single-cell assay \
+             (BD Rhapsody, Parse, SPLiT-seq, …) — run `preflightx detect-assay` to check those."
         ));
         if let Some(w) = winner {
             notes.push(format!(
-                "If it were single-cell, the closest geometry would be {} ({}bp: CB{}+UMI{}) — but the evidence above does not support a single-cell call.",
+                "If it were 10x/Drop-seq, the closest geometry would be {} ({}bp: CB{}+UMI{}) — but the evidence above does not support that call.",
                 w.display_name, w.r1_expected_len(), w.r1_cb_len, w.r1_umi_len,
             ));
         }
@@ -448,8 +449,9 @@ fn build_not_single_cell_interpretation(
             signal: "Verdict".into(),
             observation: "no barcode geometry + no TSO + no whitelist overlap".into(),
             llr_contribution: None,
-            conclusion: "All three single-cell signals are absent. This is bulk or genomic \
-                         sequencing, not single-cell — no chemistry is reported."
+            conclusion: "All three 10x/Drop-seq signals are absent — this is not a 10x or \
+                         Drop-seq library. It may be bulk/genomic or another single-cell assay; \
+                         run `preflightx detect-assay` to rank BD Rhapsody, Parse, SPLiT-seq, etc."
                 .into(),
         },
     ]

@@ -1,6 +1,7 @@
 use colored::Colorize;
 use serde::Serialize;
 
+use crate::assaydetect::DetectReport;
 use crate::chemistry::ChemReport;
 use crate::composition::CompositionReport;
 use crate::sex::SexReport;
@@ -11,6 +12,9 @@ pub struct FullReport {
     pub r1: String,
     pub r2: Option<String>,
     pub chemistry: Option<ChemReport>,
+    /// Fallback seqspec ranking, run only when `chemistry` finds no 10x/Drop-seq match.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assay_detection: Option<DetectReport>,
     pub bulk_vs_sc: BulkReport,
     pub size: SizeReport,
     pub composition: CompositionReport,
@@ -20,6 +24,23 @@ pub struct FullReport {
 }
 
 impl FullReport {
+    /// Run chem; when it finds no 10x/Drop-seq match, fall back to the generic
+    /// seqspec detector. Shared by the CLI and web builds.
+    pub fn chem_with_fallback(
+        r1: &std::path::Path,
+        r2: &std::path::Path,
+        n: usize,
+        cache: Option<&std::path::Path>,
+    ) -> anyhow::Result<(ChemReport, Option<DetectReport>)> {
+        let chem = crate::chemistry::detect(r1, r2, n, cache)?;
+        let assay = if chem.is_single_cell {
+            None
+        } else {
+            Some(crate::assaydetect::detect(r1, r2, n)?)
+        };
+        Ok((chem, assay))
+    }
+
     pub fn print(&self) {
         println!("{}", "preflightx full report".bold().bright_blue());
         println!("  R1: {}", self.r1);
@@ -29,6 +50,10 @@ impl FullReport {
         println!();
         if let Some(chem) = &self.chemistry {
             chem.print();
+            println!();
+        }
+        if let Some(assay) = &self.assay_detection {
+            assay.print();
             println!();
         }
         self.bulk_vs_sc.print();
@@ -55,6 +80,7 @@ mod tests {
             r1: "r1".into(),
             r2: None,
             chemistry: None,
+            assay_detection: None,
             bulk_vs_sc: BulkReport {
                 r1_length_dominant: 28,
                 r1_length_stddev: 0.0,

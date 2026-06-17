@@ -119,6 +119,7 @@ fn run_check_single(n: usize) -> Result<String, JsValue> {
         r1: R1.to_string(),
         r2: None,
         chemistry: None,
+        assay_detection: None,
         bulk_vs_sc: bulk,
         size: sz,
         composition: comp,
@@ -130,7 +131,8 @@ fn run_check_single(n: usize) -> Result<String, JsValue> {
 fn run_check(n: usize) -> Result<String, JsValue> {
     let r1 = Path::new(R1);
     let r2 = Path::new(R2);
-    let chem = chemistry::detect(r1, r2, n, wl_cache()).map_err(err_to_js)?;
+    let (chem, assay_detection) =
+        report::FullReport::chem_with_fallback(r1, r2, n, wl_cache()).map_err(err_to_js)?;
     let bulk = size::bulk_or_sc(r1, n).map_err(err_to_js)?;
     let sz = size::size_sanity(r1, Some(r2), n).map_err(err_to_js)?;
     let cdna = fastq::longer_read(r1, r2, 256).map_err(err_to_js)?;
@@ -139,6 +141,7 @@ fn run_check(n: usize) -> Result<String, JsValue> {
         r1: R1.to_string(),
         r2: Some(R2.to_string()),
         chemistry: Some(chem),
+        assay_detection,
         bulk_vs_sc: bulk,
         size: sz,
         composition: comp,

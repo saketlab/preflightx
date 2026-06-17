@@ -67,10 +67,12 @@ pub fn run() -> Result<()> {
     match cli.cmd {
         Cmd::Check { r1, r2 } => {
             let cache = whitelists::cache_dir()?;
-            let chem = if let Some(ref r2p) = r2 {
-                Some(chemistry::detect(&r1, r2p, cli.n_reads, Some(&cache))?)
+            let (chem, assay_detection) = if let Some(ref r2p) = r2 {
+                let (c, a) =
+                    report::FullReport::chem_with_fallback(&r1, r2p, cli.n_reads, Some(&cache))?;
+                (Some(c), a)
             } else {
-                None
+                (None, None)
             };
             let bulk = size::bulk_or_sc(&r1, cli.n_reads)?;
             let sz = size::size_sanity(&r1, r2.as_deref(), cli.n_reads)?;
@@ -86,6 +88,7 @@ pub fn run() -> Result<()> {
                 r1: r1.display().to_string(),
                 r2: r2.as_ref().map(|p| p.display().to_string()),
                 chemistry: chem,
+                assay_detection,
                 bulk_vs_sc: bulk,
                 size: sz,
                 composition: comp,

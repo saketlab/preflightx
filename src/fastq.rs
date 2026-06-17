@@ -67,6 +67,30 @@ pub fn is_gzip(bytes: &[u8]) -> bool {
     bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b
 }
 
+/// GET `url`, retrying transient failures (connection drops, timeouts, 5xx) with
+/// linear backoff; remote FASTQ hosts (SRA/ENA) flake intermittently. 4xx fails fast.
+#[cfg(not(target_arch = "wasm32"))]
+fn fetch_with_retry(url: &str) -> Result<reqwest::blocking::Response> {
+    const ATTEMPTS: u32 = 4;
+    for attempt in 1..=ATTEMPTS {
+        let err = match http_client().get(url).send().and_then(|r| r.error_for_status()) {
+            Ok(ok) => return Ok(ok),
+            // 4xx is permanent; send errors (no status) fall through to retry.
+            Err(e) if e.status().map(|s| s.is_client_error()).unwrap_or(false) => {
+                return Err(e).with_context(|| format!("fetching fastq: {url}"));
+            }
+            Err(e) => anyhow::Error::new(e),
+        };
+        if attempt == ATTEMPTS {
+            return Err(err)
+                .with_context(|| format!("fetching fastq after {ATTEMPTS} attempts: {url}"));
+        }
+        eprintln!("warning: fetch of {url} failed (attempt {attempt}/{ATTEMPTS}): {err:#}; retrying…");
+        std::thread::sleep(std::time::Duration::from_secs(2 * attempt as u64));
+    }
+    unreachable!()
+}
+
 /// Open a fastx reader for a local file, an http(s) URL, or (on wasm) an
 /// in-memory buffer from [`vfs`].
 ///
@@ -78,12 +102,7 @@ pub fn is_gzip(bytes: &[u8]) -> bool {
 fn open(path: &Path) -> Result<Box<dyn FastxReader>> {
     if is_remote(path) {
         let url = path.to_string_lossy();
-        let resp = http_client()
-            .get(url.as_ref())
-            .send()
-            .with_context(|| format!("fetching fastq: {url}"))?
-            .error_for_status()
-            .with_context(|| format!("fetching fastq: {url}"))?;
+        let resp = fetch_with_retry(url.as_ref())?;
         parse_fastx_reader(resp).with_context(|| format!("parsing remote fastq: {url}"))
     } else {
         parse_fastx_file(path).with_context(|| format!("opening fastq: {}", path.display()))
