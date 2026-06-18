@@ -204,7 +204,10 @@ fn empty_whitelist_cache_keeps_sprt_fast_path() {
     std::fs::remove_file(&r2).ok();
     std::fs::remove_dir_all(&cache_dir).ok();
 
-    assert!(report.early_stop, "expected SPRT early stop with no whitelist data");
+    assert!(
+        report.early_stop,
+        "expected SPRT early stop with no whitelist data"
+    );
     assert!(
         report.reads_sampled < 8_000,
         "expected fewer than the full read budget, got {}",

@@ -82,6 +82,8 @@
   .tab.active { background: var(--accent); color: var(--paper-on-accent); border-color: var(--accent); font-weight: 600; }
   .examples { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
   .examples-lbl { color: var(--muted); font-size: 12px; }
+  .examples select { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; font: inherit; font-size: 12.5px; cursor: pointer; max-width: 320px; }
   .tab.ex { font-size: 12px; font-family: var(--mono); }
   .pane { display: none; }
   .pane.active { display: block; }
@@ -278,6 +280,10 @@
         <button class="tab ex" type="button" data-acc="ERR4901831">ERR4901831 · 10x 3′ run</button>
         <button class="tab ex" type="button" data-acc="SRP319698">SRP319698 · study (lists runs)</button>
       </div>
+      <div class="examples">
+        <span class="examples-lbl">…or a species (real scRNA run):</span>
+        <select id="exSpecies"><option value="">— pick a species —</option></select>
+      </div>
       <div class="status" id="accStatus" role="status" aria-live="polite"></div>
       <div id="runsWrap"></div>
     </div>
@@ -326,7 +332,27 @@
 </footer>
 
 <script type="module">
-import init, { check, detect_assay, needed_whitelists, load_whitelist, onlist_sources, sex, sex_species } from './pkg/preflightx.js';
+import init, { check, detect_assay, needed_whitelists, load_whitelist, onlist_sources, sex, sex_with_panel, sex_species } from './pkg/preflightx.js';
+
+// Panel provenance (data/panels.json): scientific_name -> {spanel, common_name, example_run}.
+// Loaded once; drives the species example dropdown AND the automatic sex-panel pick.
+let PANELS = [];
+let autoSpecies = null;            // {scientific, spanel, common} detected for the current accession
+const panelTextCache = new Map();  // spanel filename -> fetched .spanel text
+
+function normSpecies(s) { return String(s || '').trim().toLowerCase().replace(/\s+/g, '_'); }
+function findPanel(scientific) {
+  const key = normSpecies(scientific);
+  return PANELS.find(p => normSpecies(p.scientific_name) === key) || null;
+}
+async function panelText(spanel) {
+  if (panelTextCache.has(spanel)) return panelTextCache.get(spanel);
+  const r = await fetch(`data/panels/${spanel}`);
+  if (!r.ok) throw new Error(`panel ${spanel} not hosted (${r.status})`);
+  const t = await r.text();
+  panelTextCache.set(spanel, t);
+  return t;
+}
 
 // preflightx samples the first N reads, so we only read the leading slice.
 const SLICE_BYTES = 48 * 1024 * 1024;
@@ -352,6 +378,7 @@ const els = {
   nreads: document.getElementById('nreads'),
   sexToggle: document.getElementById('sexToggle'), sexAdv: document.getElementById('sexAdv'),
   sexSpecies: document.getElementById('sexSpecies'), sexReads: document.getElementById('sexReads'),
+  exSpecies: document.getElementById('exSpecies'),
   btnCheck: document.getElementById('btnCheck'), btnAssay: document.getElementById('btnAssay'),
   status: document.getElementById('status'),
   verdict: document.getElementById('verdict'), vhead: document.getElementById('vhead'),
@@ -685,6 +712,21 @@ function renderCheck(r, ms) {
 async function runSex(b1, b2, setMsg) {
   if (!els.sexToggle.checked) return undefined;
   const sn = Math.max(1000, parseInt(els.sexReads.value, 10) || 200000);
+  // Auto path: a species detected from the accession → fetch its hosted panel and
+  // score against it (any catalogued species). Otherwise fall back to the embedded
+  // human/mouse panels selected in the dropdown (e.g. for direct file uploads).
+  if (autoSpecies && autoSpecies.spanel) {
+    setMsg(`fetching ${autoSpecies.common || autoSpecies.scientific} panel…`);
+    try {
+      const txt = await panelText(autoSpecies.spanel);
+      setMsg(`inferring genetic sex (first ${sn.toLocaleString()} reads)…`);
+      await new Promise(res => setTimeout(res, 0));
+      return JSON.parse(sex_with_panel(b1, b2, autoSpecies.scientific, txt, sn));
+    } catch (e) {
+      setMsg(`sex panel unavailable: ${e.message || e}`);
+      return undefined;
+    }
+  }
   setMsg(`inferring genetic sex (first ${sn.toLocaleString()} reads)…`);
   await new Promise(res => setTimeout(res, 0));
   return JSON.parse(sex(b1, b2, els.sexSpecies.value, sn));
@@ -790,6 +832,30 @@ els.btnAssay.addEventListener('click', () => run('assay'));
 els.sexToggle.addEventListener('change', () => {
   els.sexAdv.hidden = !els.sexToggle.checked;
 });
+// Species example picker: real scRNA runs from the benchmark, one per species,
+// labelled by common name. Sourced from the panel provenance file (data/panels.json),
+// the same file the native `fetch-panels` and the server deploy use.
+async function populateExamples() {
+  try {
+    const r = await fetch('data/panels.json');
+    if (r.ok) PANELS = (await r.json()).panels || [];
+  } catch { /* dropdown just stays at its single placeholder */ }
+  const opts = PANELS
+    .filter(p => p.example_run)
+    .map(p => ({ run: p.example_run, label: `${p.common_name || p.scientific_name} — ${p.scientific_name.replace(/_/g, ' ')}` }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  for (const o of opts) {
+    const opt = document.createElement('option');
+    opt.value = o.run;
+    opt.textContent = `${o.label}  ·  ${o.run}`;
+    els.exSpecies.appendChild(opt);
+  }
+}
+els.exSpecies.addEventListener('change', () => {
+  const run = els.exSpecies.value;
+  if (run) { els.accInput.value = run; fetchRuns(); }
+});
+
 // Skip mechanisms the decision rule can't yet call; flag experimental panels.
 function populateSexSpecies() {
   let panels = [];
@@ -1014,12 +1080,15 @@ function renderRunsTable(study, data, runs) {
 }
 
 function clearAutoSpecies() {
+  autoSpecies = null;
   [...els.sexSpecies.options].filter(o => o.dataset.auto).forEach(o => o.remove());
 }
-// Panel option values are common names, so resolve scientific -> common via
-// seqout /common-name and select the panel by that.
+// Fully automatic species pick: read the organism from the run's seqout metadata,
+// match it against the panel provenance, and stash the panel so the sex check uses
+// it (sex_with_panel) — no dropdown, any catalogued species, not just human/mouse.
 async function autoSelectSpecies(run) {
   try {
+    clearAutoSpecies();
     if (!run || !run.experiment_accession) return;
     const exp = await apiJson(`/experiment/${run.experiment_accession}`);
     const samp = (exp.samples || [])[0];
@@ -1027,22 +1096,23 @@ async function autoSelectSpecies(run) {
     if (!acc) return;
     const name = (await apiJson(`/sample/${acc}`)).scientific_name || '';
     if (!name) return;
-    let common = '';
-    try {
-      const hits = await apiJson(`/common-name?scientific_name=${encodeURIComponent(name)}`);
-      common = (hits[0] && hits[0].common_name || '').toLowerCase();
-    } catch {}
-    clearAutoSpecies();
-    if (common && els.sexSpecies.querySelector(`option[value="${common}"]`)) {
-      els.sexSpecies.value = common;
-      els.accStatus.insertAdjacentText('beforeend', ` · ${name} → ${common}`);
+    const panel = findPanel(name);
+    if (panel) {
+      autoSpecies = { scientific: panel.scientific_name, spanel: panel.spanel, common: panel.common_name };
+      const label = panel.common_name ? `${panel.common_name} (${name})` : name;
+      // reflect it in the (now optional) dropdown for transparency / override
+      const opt = new Option(`${label} — auto`, panel.scientific_name);
+      opt.dataset.auto = '1';
+      els.sexSpecies.add(opt);
+      els.sexSpecies.value = panel.scientific_name;
+      els.accStatus.insertAdjacentText('beforeend', ` · species: ${label} → ${panel.spanel}`);
     } else {
       const opt = new Option(`${name} (no panel)`, name);
       opt.dataset.auto = '1';
       els.sexSpecies.add(opt);
       els.sexSpecies.value = name;
       els.accStatus.insertAdjacentHTML('beforeend',
-        ` · <span style="color:var(--bad)">${escapeHtml(name)}: no sex panel (human/mouse only)</span>`);
+        ` · <span style="color:var(--bad)">${escapeHtml(name)}: no catalogued panel</span>`);
     }
   } catch {}
 }
@@ -1086,6 +1156,7 @@ els.accInput.addEventListener('keydown', e => { if (e.key === 'Enter') fetchRuns
   try {
     await init();
     populateSexSpecies();
+    populateExamples();
     ready = true;
     setStatus('analyzer ready.');
     refresh();

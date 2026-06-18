@@ -123,6 +123,7 @@ fn run_check_single(n: usize) -> Result<String, JsValue> {
         bulk_vs_sc: bulk,
         size: sz,
         composition: comp,
+        species: None,
         sex: None,
     };
     to_js(&full)
@@ -145,6 +146,7 @@ fn run_check(n: usize) -> Result<String, JsValue> {
         bulk_vs_sc: bulk,
         size: sz,
         composition: comp,
+        species: None,
         sex: None,
     };
     to_js(&full)
@@ -197,6 +199,30 @@ pub fn sex(r1: &[u8], r2: &[u8], species: &str, sex_reads: usize) -> Result<Stri
     let result = with_reads(r1, r2, |has_r2| {
         let r2_path = has_r2.then(|| Path::new(R2));
         sex::detect_sex_auto(Path::new(R1), r2_path, species, sex_reads).map_err(err_to_js)
+    });
+    to_js(&result?)
+}
+
+/// Genetic-sex inference against a panel supplied as `.spanel` text, fetched by the
+/// front-end from the hosted panel mirror (see `web/data/panels.json`). This lifts
+/// the browser beyond the two embedded human/mouse panels to *any* catalogued
+/// species, so the page can auto-pick the panel from the detected organism with no
+/// user selection. Empty/unparseable `spanel_text`, or a species with no Y/XIST
+/// pool, yields a clean "unavailable" no-call.
+#[wasm_bindgen]
+pub fn sex_with_panel(
+    r1: &[u8],
+    r2: &[u8],
+    species: &str,
+    spanel_text: &str,
+    sex_reads: usize,
+) -> Result<String, JsValue> {
+    let parsed = sexpanel::parse_spanel(spanel_text);
+    let panel = parsed.as_ref().map(|(p, _)| p);
+    let result: Result<_, JsValue> = with_reads(r1, r2, |has_r2| {
+        let r2_path = has_r2.then(|| Path::new(R2));
+        let reads = sex::sample_cdna(Path::new(R1), r2_path, sex_reads).map_err(err_to_js)?;
+        Ok(sex::report_for_reads(panel, species, &reads))
     });
     to_js(&result?)
 }

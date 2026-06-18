@@ -116,7 +116,12 @@ pub fn size_sanity(r1: &Path, r2: Option<&Path>, n: usize) -> Result<SizeReport>
     })
 }
 
-fn append_quality_notes(label: &str, summary: &PerFileSize, requested: usize, notes: &mut Vec<String>) {
+fn append_quality_notes(
+    label: &str,
+    summary: &PerFileSize,
+    requested: usize,
+    notes: &mut Vec<String>,
+) {
     if summary.n_reads_sampled < requested {
         notes.push(format!(
             "Sampled only {} reads from {label} (asked for {}); file may be small.",

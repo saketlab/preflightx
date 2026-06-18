@@ -18,7 +18,12 @@ pub mod report;
 pub mod sex;
 pub mod sexpanel;
 pub mod size;
+pub mod species;
 pub mod stats;
+
+// Native-only: the cached `.spanel` catalogue (filesystem cache + ~130 MB bundle).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod speciespanel;
 
 // Native-only: the clap CLI front-end and whitelist download/cache management
 // (reqwest + dirs). Neither is reachable from the wasm build.

@@ -67,6 +67,22 @@ pub fn revcomp(seq: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+/// Uppercase `seq` into the reusable `buf` and slide a k-window, calling `hit` for each
+/// window. Returns `false` (without calling `hit`) when the read is shorter than `k`.
+/// The one k-mer scan skeleton shared by the sex ([`crate::sex`]) and species
+/// ([`crate::speciespanel`]) scanners — they differ only in the per-window lookup.
+pub(crate) fn scan_windows(seq: &[u8], k: usize, buf: &mut Vec<u8>, mut hit: impl FnMut(&[u8])) -> bool {
+    if seq.len() < k {
+        return false;
+    }
+    buf.clear();
+    buf.extend(seq.iter().map(|b| b.to_ascii_uppercase()));
+    for w in buf.windows(k) {
+        hit(w);
+    }
+    true
+}
+
 fn parse_panel(text: &str) -> Option<SexPanel> {
     let mut meta: HashMap<&str, &str> = HashMap::new();
     let mut genes: Vec<String> = Vec::new();
@@ -118,6 +134,77 @@ fn parse_panel(text: &str) -> Option<SexPanel> {
         genes,
         kmers,
     })
+}
+
+/// Parse the 3-pool `.spanel` format (k=50, canonical) into the female/male
+/// [`SexPanel`] plus the list of canonical autosomal (species-ID) k-mers.
+///
+/// Row layout is robust to the column quirk in the catalogue: autosomal rows are
+/// `kmer\tautosomal` (2 cols) while female/male rows are `count\tkmer\tcategory`
+/// (3 cols). The **category is always the last field** and the **k-mer is the
+/// longest field**, so we pick those two regardless of column count. `.spanel`
+/// rows carry no gene name, so female k-mers are tagged `XIST` and male `Y`
+/// (one synthetic gene each — the panels guarantee a single Y/XIST locus).
+pub(crate) fn parse_spanel(text: &str) -> Option<(SexPanel, Vec<Vec<u8>>)> {
+    let mut meta: HashMap<&str, &str> = HashMap::new();
+    let mut genes: Vec<String> = Vec::new();
+    let mut gene_idx: HashMap<&str, u16> = HashMap::new();
+    let mut kmers: HashMap<Vec<u8>, (Category, u16)> = HashMap::new();
+    let mut autosomal: Vec<Vec<u8>> = Vec::new();
+
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix('#') {
+            if let Some((k, v)) = rest.split_once('\t') {
+                meta.insert(k, v);
+            }
+            continue;
+        }
+        // category = last field; k-mer = longest field (handles 2- and 3-col rows).
+        let mut cat = "";
+        let mut kmer = "";
+        for f in line.split('\t') {
+            cat = f;
+            if f.len() > kmer.len() {
+                kmer = f;
+            }
+        }
+        match cat {
+            "autosomal" => autosomal.push(kmer.as_bytes().to_vec()),
+            "female" | "male" => {
+                let (category, gene) = if cat == "female" {
+                    (Category::Female, "XIST")
+                } else {
+                    (Category::Male, "Y")
+                };
+                let idx = *gene_idx.entry(gene).or_insert_with(|| {
+                    genes.push(gene.to_string());
+                    (genes.len() - 1) as u16
+                });
+                let fwd = kmer.as_bytes().to_vec();
+                let rc = revcomp(&fwd);
+                kmers.insert(fwd, (category, idx));
+                kmers.entry(rc).or_insert((category, idx));
+            }
+            _ => continue,
+        }
+    }
+
+    if autosomal.is_empty() && kmers.is_empty() {
+        return None;
+    }
+    let panel = SexPanel {
+        species: meta.get("species").unwrap_or(&"unknown").to_string(),
+        // Header-declared if present; current catalogue is all XY/XIST, auto-derived.
+        mechanism: meta.get("mechanism").unwrap_or(&"XY_XIST").to_string(),
+        status: meta.get("status").unwrap_or(&"experimental").to_string(),
+        k: meta.get("k").and_then(|s| s.parse().ok()).unwrap_or(50),
+        genes,
+        kmers,
+    };
+    Some((panel, autosomal))
 }
 
 fn registry() -> &'static Vec<SexPanel> {

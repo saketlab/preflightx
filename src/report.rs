@@ -6,6 +6,7 @@ use crate::chemistry::ChemReport;
 use crate::composition::CompositionReport;
 use crate::sex::SexReport;
 use crate::size::{BulkReport, SizeReport};
+use crate::species::SpeciesReport;
 
 #[derive(Serialize)]
 pub struct FullReport {
@@ -18,6 +19,9 @@ pub struct FullReport {
     pub bulk_vs_sc: BulkReport,
     pub size: SizeReport,
     pub composition: CompositionReport,
+    /// `None` when no species panels are cached; serializes to no `species` key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub species: Option<SpeciesReport>,
     /// `None` when sex inference was not requested; serializes to no `sex` key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sex: Option<SexReport>,
@@ -62,6 +66,10 @@ impl FullReport {
         println!();
         self.composition.print();
         println!();
+        if let Some(species) = &self.species {
+            species.print();
+            println!();
+        }
         if let Some(sex) = &self.sex {
             sex.print();
             println!();
@@ -101,6 +109,7 @@ mod tests {
                 adequate_for_sc: true,
                 notes: vec![],
             },
+            species: None,
             composition: CompositionReport {
                 gc_pct: 50.0,
                 n_pct: 0.0,

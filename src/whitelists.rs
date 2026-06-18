@@ -6,12 +6,84 @@ use std::path::{Path, PathBuf};
 
 use crate::assay::ASSAYS;
 
-pub fn cache_dir() -> Result<PathBuf> {
+/// The preflightx cache root: `$PREFLIGHTX_CACHE` if set, else the platform cache dir.
+fn cache_base() -> Result<PathBuf> {
     if let Ok(d) = std::env::var("PREFLIGHTX_CACHE") {
         return Ok(PathBuf::from(d));
     }
     let base = dirs::cache_dir().ok_or_else(|| anyhow!("could not resolve a cache directory"))?;
-    Ok(base.join("preflightx").join("whitelists"))
+    Ok(base.join("preflightx"))
+}
+
+pub fn cache_dir() -> Result<PathBuf> {
+    Ok(cache_base()?.join("whitelists"))
+}
+
+/// Where `.spanel` species/sex panels are cached (mirrors [`cache_dir`]).
+pub fn panel_cache_dir() -> Result<PathBuf> {
+    Ok(cache_base()?.join("panels"))
+}
+
+/// The panel provenance manifest (filenames + common names + gist ids) and the
+/// server mirror that serves each `.spanel`. The mirror is populated from the
+/// gists by `scripts/deploy_panels.sh`; see `web/data/panels.json`.
+const PANELS_PROVENANCE_URL: &str = "https://preflightx.saketlab.org/data/panels.json";
+const PANELS_MIRROR_URL: &str = "https://preflightx.saketlab.org/data/panels";
+
+/// Download the `.spanel` panels into [`panel_cache_dir`]. Reads the provenance
+/// JSON (the same file the web UI + deploy script use), then fetches each panel
+/// from the server mirror. Best-effort — a missing host falls back to the
+/// manual-copy instructions.
+pub fn fetch_panels() -> Result<()> {
+    let dir = panel_cache_dir()?;
+    fs::create_dir_all(&dir)?;
+    println!("Fetching species/sex panels into {}", dir.display());
+    println!();
+
+    let client = reqwest::blocking::ClientBuilder::new()
+        .timeout(std::time::Duration::from_secs(900))
+        .build()?;
+
+    let provenance = match download_one(&client, PANELS_PROVENANCE_URL, &dir.join("panels.json")) {
+        Ok(_) => fs::read_to_string(dir.join("panels.json"))?,
+        Err(e) => {
+            println!("  could not fetch panel provenance ({e})");
+            println!();
+            println!("{}", "Panels are not yet hosted. Manual fallback:".yellow());
+            println!(
+                "{}",
+                format!("  copy the *.spanel files into {}", dir.display()).dimmed()
+            );
+            return Ok(());
+        }
+    };
+    let doc: serde_json::Value = serde_json::from_str(&provenance)?;
+    let names: Vec<String> = doc["panels"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| p["spanel"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut any_failed = false;
+    for name in &names {
+        let cached = dir.join(name).exists() && fs::metadata(dir.join(name))?.len() > 100_000;
+        any_failed |= !fetch_into(
+            &client,
+            &dir,
+            name,
+            &format!("{PANELS_MIRROR_URL}/{name}"),
+            cached,
+        )?;
+    }
+    println!();
+    if any_failed {
+        println!("{}", "Some panels could not be downloaded.".yellow());
+    }
+    println!("{} panels listed; cache directory: {}", names.len(), dir.display());
+    Ok(())
 }
 
 pub fn fetch_all() -> Result<()> {

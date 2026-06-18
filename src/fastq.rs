@@ -22,9 +22,9 @@ fn http_client() -> &'static reqwest::blocking::Client {
 /// analysis layer is shared with the native build with no signature changes.
 #[cfg(target_arch = "wasm32")]
 pub mod vfs {
-    use std::sync::Arc;
     use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     thread_local! {
         static FILES: RefCell<HashMap<String, Arc<[u8]>>> = RefCell::new(HashMap::new());
@@ -73,7 +73,11 @@ pub fn is_gzip(bytes: &[u8]) -> bool {
 fn fetch_with_retry(url: &str) -> Result<reqwest::blocking::Response> {
     const ATTEMPTS: u32 = 4;
     for attempt in 1..=ATTEMPTS {
-        let err = match http_client().get(url).send().and_then(|r| r.error_for_status()) {
+        let err = match http_client()
+            .get(url)
+            .send()
+            .and_then(|r| r.error_for_status())
+        {
             Ok(ok) => return Ok(ok),
             // 4xx is permanent; send errors (no status) fall through to retry.
             Err(e) if e.status().map(|s| s.is_client_error()).unwrap_or(false) => {
@@ -85,7 +89,9 @@ fn fetch_with_retry(url: &str) -> Result<reqwest::blocking::Response> {
             return Err(err)
                 .with_context(|| format!("fetching fastq after {ATTEMPTS} attempts: {url}"));
         }
-        eprintln!("warning: fetch of {url} failed (attempt {attempt}/{ATTEMPTS}): {err:#}; retrying…");
+        eprintln!(
+            "warning: fetch of {url} failed (attempt {attempt}/{ATTEMPTS}): {err:#}; retrying…"
+        );
         std::thread::sleep(std::time::Duration::from_secs(2 * attempt as u64));
     }
     unreachable!()
@@ -143,7 +149,9 @@ fn next_record<'a>(
     match reader.next() {
         Some(Ok(r)) => Ok(Some(r)),
         None => Ok(None),
-        Some(Err(e)) => Err(anyhow::Error::new(e)).with_context(|| format!("parsing {}", path.display())),
+        Some(Err(e)) => {
+            Err(anyhow::Error::new(e)).with_context(|| format!("parsing {}", path.display()))
+        }
     }
 }
 

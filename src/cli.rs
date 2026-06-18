@@ -6,7 +6,10 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use crate::{assaydetect, chemistry, composition, fastq, report, sex, size, whitelists};
+use crate::{
+    assaydetect, chemistry, composition, fastq, report, sex, size, species, speciespanel,
+    whitelists,
+};
 
 #[derive(Parser)]
 #[command(name = "preflightx", version, about, long_about = None)]
@@ -22,9 +25,11 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
-    /// Species for the sex check (a bundled panel; e.g. human, mouse).
-    #[arg(long, global = true, default_value = "human")]
-    species: String,
+    /// Declared species (e.g. human, mouse, Homo_sapiens). Drives the sex panel and,
+    /// for `species`/`check`, the mislabel flag. Sex defaults to human when unset;
+    /// the mislabel flag fires only when this is explicitly given.
+    #[arg(long, global = true)]
+    species: Option<String>,
 
     /// Reads to sample for the sex check (Y/XIST are sparse, so deeper than --n-reads).
     #[arg(long, global = true, default_value_t = 200_000)]
@@ -47,6 +52,9 @@ enum Cmd {
     /// Works for single-cell, single-end bulk, and paired-end bulk: barcode reads are
     /// skipped and every cDNA read is scanned (both mates for paired-end bulk).
     Sex { r1: PathBuf, r2: Option<PathBuf> },
+    /// Closed-set organism ID from cDNA reads (exact k-mer match vs cached panels).
+    /// Flags a mislabel when the call disagrees with `--species`.
+    Species { r1: PathBuf, r2: Option<PathBuf> },
     /// Generic seqspec-driven detection: rank any catalogued single-cell assay
     /// against the reads (geometry + linker anchors, no whitelist needed).
     DetectAssay { r1: PathBuf, r2: PathBuf },
@@ -59,6 +67,10 @@ enum Cmd {
     FetchWhitelists,
     /// Print the cache directory used for whitelists.
     WhitelistDir,
+    /// Download the species/sex `.spanel` bundle (~130 MB) into the panel cache.
+    FetchPanels,
+    /// Print the cache directory used for species/sex panels.
+    PanelDir,
 }
 
 pub fn run() -> Result<()> {
@@ -83,7 +95,23 @@ pub fn run() -> Result<()> {
                 None => &r1,
             };
             let comp = composition::composition(cdna_read, cli.n_reads)?;
-            let sx = sex::detect_sex_auto(&r1, r2.as_deref(), &cli.species, cli.sex_reads)?;
+            // Species first, then route sex to the *called* species' panel. Both scan the
+            // same sampled cDNA reads (one read pass). With no panels cached we degrade to
+            // the legacy behaviour: no species call, sex against the --species default.
+            let catalogue = speciespanel::Catalogue::load()?;
+            let (species_rep, sx) = if catalogue.is_empty() {
+                let sp = cli.species.as_deref().unwrap_or("human");
+                (
+                    None,
+                    sex::detect_sex_auto(&r1, r2.as_deref(), sp, cli.sex_reads)?,
+                )
+            } else {
+                let reads = sex::sample_cdna(&r1, r2.as_deref(), cli.sex_reads)?;
+                let sp = species::detect_species(&reads, &catalogue, cli.species.as_deref());
+                let panel = catalogue.for_species(&sp.called);
+                let sx = sex::report_for_reads(panel, &sp.called, &reads);
+                (Some(sp), sx)
+            };
             let r = report::FullReport {
                 r1: r1.display().to_string(),
                 r2: r2.as_ref().map(|p| p.display().to_string()),
@@ -92,6 +120,7 @@ pub fn run() -> Result<()> {
                 bulk_vs_sc: bulk,
                 size: sz,
                 composition: comp,
+                species: species_rep,
                 sex: Some(sx),
             };
             if cli.json {
@@ -135,8 +164,25 @@ pub fn run() -> Result<()> {
         }
         Cmd::Sex { r1, r2 } => {
             // Auto-selects cDNA reads: the cDNA read for single-cell, both mates for
-            // paired-end bulk, or the sole file for single-end.
-            let s = sex::detect_sex_auto(&r1, r2.as_deref(), &cli.species, cli.sex_reads)?;
+            // paired-end bulk, or the sole file for single-end. Prefers a cached panel.
+            let sp = cli.species.as_deref().unwrap_or("human");
+            let catalogue = speciespanel::Catalogue::load()?;
+            let s = sex::detect_sex_auto_cat(&r1, r2.as_deref(), &catalogue, sp, cli.sex_reads)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&s)?);
+            } else {
+                s.print();
+            }
+        }
+        Cmd::Species { r1, r2 } => {
+            let catalogue = speciespanel::Catalogue::load()?;
+            let s = species::detect_species_auto(
+                &r1,
+                r2.as_deref(),
+                &catalogue,
+                cli.species.as_deref(),
+                cli.sex_reads,
+            )?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&s)?);
             } else {
@@ -184,6 +230,12 @@ pub fn run() -> Result<()> {
         }
         Cmd::WhitelistDir => {
             println!("{}", whitelists::cache_dir()?.display());
+        }
+        Cmd::FetchPanels => {
+            whitelists::fetch_panels()?;
+        }
+        Cmd::PanelDir => {
+            println!("{}", whitelists::panel_cache_dir()?.display());
         }
     }
     Ok(())

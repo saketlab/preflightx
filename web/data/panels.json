@@ -1,0 +1,630 @@
+{
+  "k": 50,
+  "canonical": true,
+  "note": "preflightx species/sex panels.", 
+  "panels": [
+    {
+      "scientific_name": "Acomys_cahirinus",
+      "common_name": "Cairo spiny mouse",
+      "spanel": "Acomys_cahirinus.spanel",
+      "gist_id": "cbb65fa18a094ba9f756cb783d87dec3",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Aedes_aegypti",
+      "common_name": "yellow fever mosquito",
+      "spanel": "Aedes_aegypti.spanel",
+      "gist_id": "e15d3a567088ff21b9a4d1acbec2f93f",
+      "example_run": "SRR26591149"
+    },
+    {
+      "scientific_name": "Ailuropoda_melanoleuca",
+      "common_name": "giant panda",
+      "spanel": "Ailuropoda_melanoleuca.spanel",
+      "gist_id": "7a816a67e4b36a742d04fc8db664c72f",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Ambystoma_mexicanum",
+      "common_name": "axolotl",
+      "spanel": "Ambystoma_mexicanum.spanel",
+      "gist_id": "6f982e45d02feb4e21264411828db792",
+      "example_run": "SRR18946228"
+    },
+    {
+      "scientific_name": "Anas_platyrhynchos",
+      "common_name": "mallard duck",
+      "spanel": "Anas_platyrhynchos.spanel",
+      "gist_id": "ce4dab02c44609c642c74e8fd27a8512",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Anolis_carolinensis",
+      "common_name": "Carolina anole",
+      "spanel": "Anolis_carolinensis.spanel",
+      "gist_id": "85811b8173d6a67404866293d26682a7",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Anolis_sagrei",
+      "common_name": "brown anole",
+      "spanel": "Anolis_sagrei.spanel",
+      "gist_id": "fee97cb2431f24dffda56ae8bafca96d",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Apis_mellifera",
+      "common_name": "honey bee",
+      "spanel": "Apis_mellifera.spanel",
+      "gist_id": "bab651c27a5de8edbf0ebb8785b094e9",
+      "example_run": "SRR26863823"
+    },
+    {
+      "scientific_name": "Aplysia_californica",
+      "common_name": "California sea hare",
+      "spanel": "Aplysia_californica.spanel",
+      "gist_id": "3abde8a99773b7cf1fab6a849fbf4e0c",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Artibeus_jamaicensis",
+      "common_name": "Jamaican fruit bat",
+      "spanel": "Artibeus_jamaicensis.spanel",
+      "gist_id": "4df6bb678feb6f98b61c5e12f9033d68",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Astyanax_mexicanus",
+      "common_name": "Mexican cavefish",
+      "spanel": "Astyanax_mexicanus.spanel",
+      "gist_id": "7c7512468db8caec72cf187c80a198e2",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Bombyx_mori",
+      "common_name": "silk moth",
+      "spanel": "Bombyx_mori.spanel",
+      "gist_id": "db693ace25726fde887808cb3e9bd52b",
+      "example_run": "SRR17499124"
+    },
+    {
+      "scientific_name": "Bos_indicus",
+      "common_name": "zebu",
+      "spanel": "Bos_indicus.spanel",
+      "gist_id": "f7dcdef7c98b2d8d4fbfc7a5fd8055ac",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Bos_taurus",
+      "common_name": "cattle",
+      "spanel": "Bos_taurus.spanel",
+      "gist_id": "cd0c880788c48517becafeabdc86bb2c",
+      "example_run": "SRR26217669"
+    },
+    {
+      "scientific_name": "Bubalus_bubalis",
+      "common_name": "water buffalo",
+      "spanel": "Bubalus_bubalis.spanel",
+      "gist_id": "bb322b22d34b614e081cc33c8c3dab49",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Caenorhabditis_elegans",
+      "common_name": "nematode",
+      "spanel": "Caenorhabditis_elegans.spanel",
+      "gist_id": "7bb51841df9dcfea792f5fc867efb247",
+      "example_run": "SRR30172517"
+    },
+    {
+      "scientific_name": "Callithrix_jacchus",
+      "common_name": "common marmoset",
+      "spanel": "Callithrix_jacchus.spanel",
+      "gist_id": "8f77492004a41170f26c4ecb557aeb20",
+      "example_run": "SRR22312590"
+    },
+    {
+      "scientific_name": "Camelus_bactrianus",
+      "common_name": "Bactrian camel",
+      "spanel": "Camelus_bactrianus.spanel",
+      "gist_id": "6b2461b772eb413b7522cb917781df49",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Canis_lupus",
+      "common_name": "gray wolf",
+      "spanel": "Canis_lupus.spanel",
+      "gist_id": "1a8c7f86ca1447f057a8d61bed1bca16",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Canis_lupus_familiaris",
+      "common_name": "dog",
+      "spanel": "Canis_lupus_familiaris.spanel",
+      "gist_id": "21d4048f71eb1ffcd3399baa728bd03e",
+      "example_run": "SRR36395097"
+    },
+    {
+      "scientific_name": "Capra_hircus",
+      "common_name": "goat",
+      "spanel": "Capra_hircus.spanel",
+      "gist_id": "eb420c8cd2a92b16d92e617f490de507",
+      "example_run": "SRR24868066"
+    },
+    {
+      "scientific_name": "Cavia_porcellus",
+      "common_name": "guinea pig",
+      "spanel": "Cavia_porcellus.spanel",
+      "gist_id": "a5a843c89422149d0598542d49a21019",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Chlorocebus_sabaeus",
+      "common_name": "green monkey",
+      "spanel": "Chlorocebus_sabaeus.spanel",
+      "gist_id": "a2adb61d81ecb277325c40fb51fc16da",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Ciona_intestinalis",
+      "common_name": "sea vase",
+      "spanel": "Ciona_intestinalis.spanel",
+      "gist_id": "cd9b77a67c52b3e4666cdca00a3ace9f",
+      "example_run": "SRR17334640"
+    },
+    {
+      "scientific_name": "Columba_livia",
+      "common_name": "rock pigeon",
+      "spanel": "Columba_livia.spanel",
+      "gist_id": "bf6f2f2c1cebb7426a070da7c27ece93",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Coturnix_japonica",
+      "common_name": "Japanese quail",
+      "spanel": "Coturnix_japonica.spanel",
+      "gist_id": "f3c2c62f87271e0965f893e38d1aa791",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Cricetulus_griseus",
+      "common_name": "Chinese hamster",
+      "spanel": "Cricetulus_griseus.spanel",
+      "gist_id": "daaf91f898b46ae6a48662354e21fdcc",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Ctenopharyngodon_idella",
+      "common_name": "grass carp",
+      "spanel": "Ctenopharyngodon_idella.spanel",
+      "gist_id": "6996e2de17a7ca43ef28410691550edd",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Cyprinus_carpio",
+      "common_name": "common carp",
+      "spanel": "Cyprinus_carpio.spanel",
+      "gist_id": "4ae9a0062497739912ffb303e36f00e9",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Danio_rerio",
+      "common_name": "zebrafish",
+      "spanel": "Danio_rerio.spanel",
+      "gist_id": "abc6dc59cb3121f92e8d50d94b2ea135",
+      "example_run": "SRR22838795"
+    },
+    {
+      "scientific_name": "Daphnia_magna",
+      "common_name": "water flea",
+      "spanel": "Daphnia_magna.spanel",
+      "gist_id": "514619ec10a609c20003a01eec870fd7",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Dasypus_novemcinctus",
+      "common_name": "nine-banded armadillo",
+      "spanel": "Dasypus_novemcinctus.spanel",
+      "gist_id": "a8fab8578c5c67c44428a9f244679cb9",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Drosophila_melanogaster",
+      "common_name": "fruit fly",
+      "spanel": "Drosophila_melanogaster.spanel",
+      "gist_id": "e6d16241eff29fd6848c0b984112ea16",
+      "example_run": "SRR18937052"
+    },
+    {
+      "scientific_name": "Eptesicus_fuscus",
+      "common_name": "big brown bat",
+      "spanel": "Eptesicus_fuscus.spanel",
+      "gist_id": "6b1e8c6375821f6f955a4368cee0180f",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Equus_asinus",
+      "common_name": "donkey",
+      "spanel": "Equus_asinus.spanel",
+      "gist_id": "8146cbcdd97275928d2fd9eb9cf64895",
+      "example_run": "SRR31482654"
+    },
+    {
+      "scientific_name": "Equus_caballus",
+      "common_name": "horse",
+      "spanel": "Equus_caballus.spanel",
+      "gist_id": "468967123934a92e86886f70ee2b1715",
+      "example_run": "SRR27835303"
+    },
+    {
+      "scientific_name": "Eublepharis_macularius",
+      "common_name": "leopard gecko",
+      "spanel": "Eublepharis_macularius.spanel",
+      "gist_id": "7585a3d72771399d8f93feea8048b69a",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Felis_catus",
+      "common_name": "cat",
+      "spanel": "Felis_catus.spanel",
+      "gist_id": "f8d3ca39923ec3e2052363f37bf4d314",
+      "example_run": "SRR29012967"
+    },
+    {
+      "scientific_name": "Gallus_gallus",
+      "common_name": "chicken",
+      "spanel": "Gallus_gallus.spanel",
+      "gist_id": "21d34d7450014fd98267c4d4ee297a32",
+      "example_run": "SRR20188647"
+    },
+    {
+      "scientific_name": "Gasterosteus_aculeatus",
+      "common_name": "three-spined stickleback",
+      "spanel": "Gasterosteus_aculeatus.spanel",
+      "gist_id": "d8d7b478ac94fc8f9b832fa06fee5546",
+      "example_run": "SRR33823513"
+    },
+    {
+      "scientific_name": "Gorilla_gorilla",
+      "common_name": "gorilla",
+      "spanel": "Gorilla_gorilla.spanel",
+      "gist_id": "6807ea21aa97669125e9ef0123ee49e1",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Heterocephalus_glaber",
+      "common_name": "naked mole-rat",
+      "spanel": "Heterocephalus_glaber.spanel",
+      "gist_id": "dabfd01bc1a166534ca7365ffb36d6e2",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Homo_sapiens",
+      "common_name": "human",
+      "spanel": "Homo_sapiens.spanel",
+      "gist_id": "80606493f06e198c3e6cd6a5b9c5c50b",
+      "example_run": "SRR31131528"
+    },
+    {
+      "scientific_name": "Hydra_vulgaris",
+      "common_name": "hydra",
+      "spanel": "Hydra_vulgaris.spanel",
+      "gist_id": "f46925875a5cef3ad9dbe288dfc4af35",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Ictidomys_tridecemlineatus",
+      "common_name": "thirteen-lined ground squirrel",
+      "spanel": "Ictidomys_tridecemlineatus.spanel",
+      "gist_id": "0bd8d18a6b3e725da665f84809f8e408",
+      "example_run": "SRR34703730"
+    },
+    {
+      "scientific_name": "Macaca_fascicularis",
+      "common_name": "crab-eating macaque",
+      "spanel": "Macaca_fascicularis.spanel",
+      "gist_id": "602cd40ef19e4d6a7024cea6d2db7ef2",
+      "example_run": "SRR19994472"
+    },
+    {
+      "scientific_name": "Macaca_mulatta",
+      "common_name": "rhesus macaque",
+      "spanel": "Macaca_mulatta.spanel",
+      "gist_id": "fde3f7a18b9f495e75661e5bb183e372",
+      "example_run": "SRR18012805"
+    },
+    {
+      "scientific_name": "Macaca_nemestrina",
+      "common_name": "pig-tailed macaque",
+      "spanel": "Macaca_nemestrina.spanel",
+      "gist_id": "3d88dfe793f0c425d1be523af413b6c3",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Manis_javanica",
+      "common_name": "Javan pangolin",
+      "spanel": "Manis_javanica.spanel",
+      "gist_id": "acc69221a03085fa16f5f2a3125a1480",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Maylandia_zebra",
+      "common_name": "zebra mbuna",
+      "spanel": "Maylandia_zebra.spanel",
+      "gist_id": "216e514e8fa57e2ad74665495a06e6b6",
+      "example_run": "SRR17499318"
+    },
+    {
+      "scientific_name": "Melopsittacus_undulatus",
+      "common_name": "budgerigar",
+      "spanel": "Melopsittacus_undulatus.spanel",
+      "gist_id": "f04e13cf19df9a40b48115ce5e6efea4",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Meriones_unguiculatus",
+      "common_name": "Mongolian gerbil",
+      "spanel": "Meriones_unguiculatus.spanel",
+      "gist_id": "3dea5b9741596810a3467072aaf0dd30",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Mesocricetus_auratus",
+      "common_name": "Syrian hamster",
+      "spanel": "Mesocricetus_auratus.spanel",
+      "gist_id": "3abb3cb8082b17706d89011d5b45c156",
+      "example_run": "SRR24971051"
+    },
+    {
+      "scientific_name": "Microcebus_murinus",
+      "common_name": "gray mouse lemur",
+      "spanel": "Microcebus_murinus.spanel",
+      "gist_id": "b926b27d5748027c8fe4695a9efc1d54",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Micropterus_salmoides",
+      "common_name": "largemouth bass",
+      "spanel": "Micropterus_salmoides.spanel",
+      "gist_id": "f4e1657a555c39466882a19c7e22c3be",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Microtus_ochrogaster",
+      "common_name": "prairie vole",
+      "spanel": "Microtus_ochrogaster.spanel",
+      "gist_id": "6c48fcafc6816dd17c732963367f2f96",
+      "example_run": "SRR27956883"
+    },
+    {
+      "scientific_name": "Mus_musculus",
+      "common_name": "mouse",
+      "spanel": "Mus_musculus.spanel",
+      "gist_id": "8e9d47e78d12715886c8446279aa7361",
+      "example_run": "SRR26554491"
+    },
+    {
+      "scientific_name": "Mus_spretus",
+      "common_name": "Algerian mouse",
+      "spanel": "Mus_spretus.spanel",
+      "gist_id": "585f90d2ed1abd08bb5f46ce15033178",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Mustela_putorius",
+      "common_name": "European polecat",
+      "spanel": "Mustela_putorius.spanel",
+      "gist_id": "3f04d089c1534bd27240615fa98cb543",
+      "example_run": "SRR22508247"
+    },
+    {
+      "scientific_name": "Nannospalax_galili",
+      "common_name": "blind mole-rat",
+      "spanel": "Nannospalax_galili.spanel",
+      "gist_id": "212f44a3de38bd0fe540022e6b7a4409",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Nematostella_vectensis",
+      "common_name": "starlet sea anemone",
+      "spanel": "Nematostella_vectensis.spanel",
+      "gist_id": "f239b47a694e49a7c0aacecd2b0856f3",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Nothobranchius_furzeri",
+      "common_name": "turquoise killifish",
+      "spanel": "Nothobranchius_furzeri.spanel",
+      "gist_id": "0de0af89265b5a42129bb43ec1f5eb6c",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Oncorhynchus_mykiss",
+      "common_name": "rainbow trout",
+      "spanel": "Oncorhynchus_mykiss.spanel",
+      "gist_id": "332640d2e343cedc198beba1bf2b20db",
+      "example_run": "SRR28227295"
+    },
+    {
+      "scientific_name": "Oreochromis_niloticus",
+      "common_name": "Nile tilapia",
+      "spanel": "Oreochromis_niloticus.spanel",
+      "gist_id": "03bc9fedaedfc211f8519606becd1c4b",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Oryctolagus_cuniculus",
+      "common_name": "rabbit",
+      "spanel": "Oryctolagus_cuniculus.spanel",
+      "gist_id": "ceb1f62c2861f69008a0b2b7a5e9e277",
+      "example_run": "SRR19637156"
+    },
+    {
+      "scientific_name": "Oryzias_latipes",
+      "common_name": "medaka",
+      "spanel": "Oryzias_latipes.spanel",
+      "gist_id": "40a5cbac1194935fab3a19edfb4d8975",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Ovis_aries",
+      "common_name": "sheep",
+      "spanel": "Ovis_aries.spanel",
+      "gist_id": "dccfa6e7367c4e7aa104c0a66c75b02a",
+      "example_run": "SRR33185871"
+    },
+    {
+      "scientific_name": "Pan_paniscus",
+      "common_name": "bonobo",
+      "spanel": "Pan_paniscus.spanel",
+      "gist_id": "6944db409ddc758dd51cf52b67c6ffb1",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Pan_troglodytes",
+      "common_name": "chimpanzee",
+      "spanel": "Pan_troglodytes.spanel",
+      "gist_id": "78ecfbb89e95d7dd91725caa192592d2",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Panthera_tigris",
+      "common_name": "tiger",
+      "spanel": "Panthera_tigris.spanel",
+      "gist_id": "e9f1e08642e7d8f6be88b4a40e533502",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Pantherophis_guttatus",
+      "common_name": "corn snake",
+      "spanel": "Pantherophis_guttatus.spanel",
+      "gist_id": "a9102eea1572c9aad5f5866ef1b25357",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Papio_anubis",
+      "common_name": "olive baboon",
+      "spanel": "Papio_anubis.spanel",
+      "gist_id": "cf762765aa17046faeeee5992b963fcd",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Patiria_miniata",
+      "common_name": "bat star",
+      "spanel": "Patiria_miniata.spanel",
+      "gist_id": "8415495bb237722e017124c6017ac0aa",
+      "example_run": "SRR35095266"
+    },
+    {
+      "scientific_name": "Peromyscus_maniculatus",
+      "common_name": "deer mouse",
+      "spanel": "Peromyscus_maniculatus.spanel",
+      "gist_id": "f14a2729760f89996820920afe24432a",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Petromyzon_marinus",
+      "common_name": "sea lamprey",
+      "spanel": "Petromyzon_marinus.spanel",
+      "gist_id": "d6d2817a9ee58633908a50d33fad347b",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Pongo_abelii",
+      "common_name": "Sumatran orangutan",
+      "spanel": "Pongo_abelii.spanel",
+      "gist_id": "8dafd61b081812a322f179be98247c5d",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Rattus_norvegicus",
+      "common_name": "brown rat",
+      "spanel": "Rattus_norvegicus.spanel",
+      "gist_id": "a12941baec54deed7d7ca49c94fdd21e",
+      "example_run": "SRR18012819"
+    },
+    {
+      "scientific_name": "Rhinolophus_sinicus",
+      "common_name": "Chinese horseshoe bat",
+      "spanel": "Rhinolophus_sinicus.spanel",
+      "gist_id": "685a8d039cdbd751df48f8f9963778d0",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Rousettus_aegyptiacus",
+      "common_name": "Egyptian fruit bat",
+      "spanel": "Rousettus_aegyptiacus.spanel",
+      "gist_id": "874ca4057cf94e8704771a9315b1bdb3",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Salmo_salar",
+      "common_name": "Atlantic salmon",
+      "spanel": "Salmo_salar.spanel",
+      "gist_id": "a74d2ee9c3da9d4e85221821a0265028",
+      "example_run": "SRR27503831"
+    },
+    {
+      "scientific_name": "Schmidtea_mediterranea",
+      "common_name": "freshwater planarian",
+      "spanel": "Schmidtea_mediterranea.spanel",
+      "gist_id": "bbcfb91651758a2653e3fe6433877183",
+      "example_run": "SRR28906844"
+    },
+    {
+      "scientific_name": "Scophthalmus_maximus",
+      "common_name": "turbot",
+      "spanel": "Scophthalmus_maximus.spanel",
+      "gist_id": "bf1e6c8f4760f771e096cbf81545d2cb",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Strongylocentrotus_purpuratus",
+      "common_name": "purple sea urchin",
+      "spanel": "Strongylocentrotus_purpuratus.spanel",
+      "gist_id": "c2f235c96181485a9cdcec91c5fb9c85",
+      "example_run": "SRR25661586"
+    },
+    {
+      "scientific_name": "Sus_scrofa",
+      "common_name": "pig",
+      "spanel": "Sus_scrofa.spanel",
+      "gist_id": "037b4cea3d28d9c22872fcff71132337",
+      "example_run": "SRR18012818"
+    },
+    {
+      "scientific_name": "Taeniopygia_guttata",
+      "common_name": "zebra finch",
+      "spanel": "Taeniopygia_guttata.spanel",
+      "gist_id": "29f61dcd50fb76e34e246c936b5156a3",
+      "example_run": "SRR17849681"
+    },
+    {
+      "scientific_name": "Tupaia_chinensis",
+      "common_name": "Chinese tree shrew",
+      "spanel": "Tupaia_chinensis.spanel",
+      "gist_id": "40fe15b8f5b1f4641ae4c3891baf2ef3",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Vicugna_pacos",
+      "common_name": "alpaca",
+      "spanel": "Vicugna_pacos.spanel",
+      "gist_id": "5f9c47810cc1b76b84bd2d952ef22ea7",
+      "example_run": null
+    },
+    {
+      "scientific_name": "Xenopus_laevis",
+      "common_name": "African clawed frog",
+      "spanel": "Xenopus_laevis.spanel",
+      "gist_id": "7ac4782561940366eae1814a234c3ae4",
+      "example_run": "SRR26384177"
+    },
+    {
+      "scientific_name": "Xenopus_tropicalis",
+      "common_name": "western clawed frog",
+      "spanel": "Xenopus_tropicalis.spanel",
+      "gist_id": "f5ef135a0b29352ab6bb1bcb4f04ac3e",
+      "example_run": null
+    }
+  ]
+}

@@ -4,11 +4,7 @@ Cargo.lock.bak
 .DS_Store
 dist/
 
-# Generated WebAssembly bindings (produced by scripts/build-wasm.sh)
 web/pkg/
-
-# 10x barcode onlists fetched at deploy time (licensed, never committed)
 web/whitelists/
-
-# Deployment config (server-specific, kept local)
 deploy/
+web/data/panels/

@@ -82,44 +82,93 @@ struct Tally {
     gene_reads: Vec<u64>, // indexed by SexPanel::genes
 }
 
-/// Stream the leading `n_reads` of `cdna` and accumulate Y / XIST marker hits into
-/// `t` (the only I/O). Called once per cDNA read, so paired-end bulk sums both mates.
-fn scan_into(panel: &SexPanel, cdna: &Path, n_reads: usize, t: &mut Tally) -> Result<()> {
-    let k = panel.k;
-    let mut buf: Vec<u8> = Vec::new();
-    let mut read_genes: Vec<u16> = Vec::with_capacity(panel.genes.len());
-
-    fastq::for_each_record(cdna, n_reads, |seq, _| {
-        t.scanned += 1;
-        if seq.len() < k {
-            t.too_short += 1;
-            return;
-        }
-        buf.clear();
-        buf.extend(seq.iter().map(|b| b.to_ascii_uppercase()));
-        read_genes.clear();
-        let mut hit_male = false;
-        let mut hit_female = false;
-        for w in buf.windows(k) {
-            if let Some((cat, idx)) = panel.get(w) {
-                match cat {
-                    Category::Female => hit_female = true,
-                    Category::Male => {
-                        hit_male = true;
-                        if !read_genes.contains(&idx) {
-                            read_genes.push(idx);
-                        }
+/// Accumulate one read's Y / XIST marker hits into `t`. `buf`/`read_genes` are
+/// caller-owned scratch reused across reads to avoid per-read allocation.
+fn count_read(
+    panel: &SexPanel,
+    seq: &[u8],
+    t: &mut Tally,
+    buf: &mut Vec<u8>,
+    read_genes: &mut Vec<u16>,
+) {
+    t.scanned += 1;
+    read_genes.clear();
+    let mut hit_male = false;
+    let mut hit_female = false;
+    let scanned = crate::sexpanel::scan_windows(seq, panel.k, buf, |w| {
+        if let Some((cat, idx)) = panel.get(w) {
+            match cat {
+                Category::Female => hit_female = true,
+                Category::Male => {
+                    hit_male = true;
+                    if !read_genes.contains(&idx) {
+                        read_genes.push(idx);
                     }
                 }
             }
         }
-        t.y_hit_reads += hit_male as u64;
-        t.xist_hit_reads += hit_female as u64;
-        for &idx in &read_genes {
-            t.gene_reads[idx as usize] += 1;
-        }
+    });
+    if !scanned {
+        t.too_short += 1;
+        return;
+    }
+    t.y_hit_reads += hit_male as u64;
+    t.xist_hit_reads += hit_female as u64;
+    for &idx in read_genes.iter() {
+        t.gene_reads[idx as usize] += 1;
+    }
+}
+
+fn new_tally(panel: &SexPanel) -> Tally {
+    Tally {
+        scanned: 0,
+        too_short: 0,
+        y_hit_reads: 0,
+        xist_hit_reads: 0,
+        gene_reads: vec![0; panel.genes.len()],
+    }
+}
+
+/// Stream the leading `n_reads` of `cdna` and accumulate Y / XIST marker hits into
+/// `t` (the only I/O). Called once per cDNA read, so paired-end bulk sums both mates.
+fn scan_into(panel: &SexPanel, cdna: &Path, n_reads: usize, t: &mut Tally) -> Result<()> {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut read_genes: Vec<u16> = Vec::with_capacity(panel.genes.len());
+    fastq::for_each_record(cdna, n_reads, |seq, _| {
+        count_read(panel, seq, t, &mut buf, &mut read_genes);
     })?;
     Ok(())
+}
+
+/// Score genetic sex from already-sampled in-memory `reads` (shares the read pass
+/// with the species scan in `check`). `panel == None` or an empty (no-sex-pool)
+/// panel yields a clean "unavailable" no-call.
+pub fn report_for_reads(panel: Option<&SexPanel>, species: &str, reads: &[Vec<u8>]) -> SexReport {
+    let panel = match panel {
+        Some(p) if !p.is_empty() => p,
+        _ => {
+            return no_panel(
+                species,
+                format!("sex unavailable: no XIST/Y panel for '{species}'"),
+            )
+        }
+    };
+    if panel.mechanism != "XY_XIST" {
+        return no_panel(
+            species,
+            format!(
+                "panel mechanism '{}' is not supported by the current decision rule (only XY_XIST)",
+                panel.mechanism
+            ),
+        );
+    }
+    let mut t = new_tally(panel);
+    let mut buf: Vec<u8> = Vec::new();
+    let mut read_genes: Vec<u16> = Vec::with_capacity(panel.genes.len());
+    for seq in reads {
+        count_read(panel, seq, &mut t, &mut buf, &mut read_genes);
+    }
+    analyze(panel, species, &t)
 }
 
 /// Pure scoring: turn a [`Tally`] into a verdict + per-gene evidence ledger + notes.
@@ -240,13 +289,7 @@ pub fn detect_sex_reads(reads: &[&Path], species: &str, n_reads: usize) -> Resul
             ),
         ));
     }
-    let mut tally = Tally {
-        scanned: 0,
-        too_short: 0,
-        y_hit_reads: 0,
-        xist_hit_reads: 0,
-        gene_reads: vec![0; panel.genes.len()],
-    };
+    let mut tally = new_tally(panel);
     for path in reads {
         scan_into(panel, path, n_reads, &mut tally)?;
     }
@@ -258,6 +301,23 @@ pub fn detect_sex_reads(reads: &[&Path], species: &str, n_reads: usize) -> Resul
         ));
     }
     Ok(report)
+}
+
+/// Genetic sex for `species`, preferring its cached `.spanel` panel and falling
+/// back to an embedded one (human/mouse) — so `sex --species <cached>` works.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn detect_sex_auto_cat(
+    r1: &Path,
+    r2: Option<&Path>,
+    cat: &crate::speciespanel::Catalogue,
+    species: &str,
+    n_reads: usize,
+) -> Result<SexReport> {
+    let reads = sample_cdna(r1, r2, n_reads)?;
+    let panel = cat
+        .for_species(species)
+        .or_else(|| sexpanel::for_species(species));
+    Ok(report_for_reads(panel, species, &reads))
 }
 
 /// Infer genetic sex from a single cDNA read.
@@ -279,10 +339,21 @@ pub fn detect_sex_auto(
     detect_sex_reads(&reads, species, n_reads)
 }
 
+/// Sample up to `n` reads from the cDNA read(s) of `r1`/`r2` into memory, so the
+/// species and sex scans can share one read pass (one download for remote inputs).
+pub fn sample_cdna(r1: &Path, r2: Option<&Path>, n: usize) -> Result<Vec<Vec<u8>>> {
+    let mut reads = Vec::new();
+    for p in cdna_reads(r1, r2)? {
+        let (seqs, _) = fastq::sample(p, n)?;
+        reads.extend(seqs);
+    }
+    Ok(reads)
+}
+
 /// The cDNA reads among `r1`/`r2`: drops a read whose length profile is a known
 /// single-cell barcode geometry. Falls back to `r1` if both somehow look like
 /// barcode reads (so a call is still attempted rather than scanning nothing).
-fn cdna_reads<'a>(r1: &'a Path, r2: Option<&'a Path>) -> Result<Vec<&'a Path>> {
+pub(crate) fn cdna_reads<'a>(r1: &'a Path, r2: Option<&'a Path>) -> Result<Vec<&'a Path>> {
     let mut out = Vec::new();
     for p in std::iter::once(r1).chain(r2) {
         if !is_barcode_read(p)? {
@@ -365,6 +436,20 @@ mod tests {
     use super::*;
     use crate::sexpanel::for_species;
     use crate::testutil::write_fastq;
+
+    #[test]
+    fn sex_unavailable_when_no_xist_or_y_pool() {
+        // A panel with only an autosomal pool (e.g. a bird/fish with no XIST/Y) must
+        // report sex unavailable, never guess a verdict.
+        let cat = crate::speciespanel::Catalogue::from_texts(&[
+            "#species\tGallus_gallus\n#k\t10\nAAAAAAAAAA\tautosomal\n",
+        ]);
+        let panel = cat.for_species("Gallus_gallus");
+        let reads: Vec<Vec<u8>> = (0..10).map(|_| vec![b'A'; 50]).collect();
+        let r = report_for_reads(panel, "Gallus_gallus", &reads);
+        assert_eq!(r.verdict, "unknown");
+        assert_eq!(r.panel_status, "unsupported");
+    }
 
     #[test]
     fn analyze_scores_a_tally_without_io() {

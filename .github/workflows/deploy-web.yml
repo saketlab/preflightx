@@ -67,12 +67,28 @@ jobs:
           PREFLIGHTX_CACHE="$PWD/web/whitelists" cargo run --release -- fetch-whitelists
           ls -lh web/whitelists
 
+      - name: Cache species/sex panels
+        uses: actions/cache@v4
+        with:
+          path: web/data/panels
+          key: panels-${{ hashFiles('web/data/panels.json') }}
+          restore-keys: panels-
+
+      - name: Fetch species/sex panels from gists
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/fetch_panels_from_gists.py --out web/data/panels
+          ls web/data/panels | wc -l
+
       - name: Verify build artifacts
         run: |
           test -f web/pkg/preflightx_bg.wasm || { echo "missing wasm bundle"; exit 1; }
           test -f web/pkg/preflightx.js || { echo "missing wasm JS bindings"; exit 1; }
           test -f web/index.html || { echo "missing index.html"; exit 1; }
           test "$(ls web/whitelists/*.txt.gz 2>/dev/null | wc -l)" -ge 1 || { echo "no whitelists"; exit 1; }
+          test -f web/data/panels.json || { echo "missing panels.json"; exit 1; }
+          test "$(ls web/data/panels/*.spanel 2>/dev/null | wc -l)" -ge 80 || { echo "too few panels"; exit 1; }
 
       - name: Deploy to Hostinger over SSH
         env:

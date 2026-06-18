@@ -150,13 +150,16 @@ pub fn catalogue() -> Vec<CatalogueEntry> {
 
 /// Find a catalogued assay by spec filename, its stem, or assay_id (case-insensitive).
 pub fn find_assay(query: &str) -> Option<Assay> {
-    embedded_assays().iter().find(|a| {
-        a.spec_file.eq_ignore_ascii_case(query)
-            || a.spec_file
-                .trim_end_matches(".spec.yaml")
-                .eq_ignore_ascii_case(query)
-            || a.assay_id.eq_ignore_ascii_case(query)
-    }).cloned()
+    embedded_assays()
+        .iter()
+        .find(|a| {
+            a.spec_file.eq_ignore_ascii_case(query)
+                || a.spec_file
+                    .trim_end_matches(".spec.yaml")
+                    .eq_ignore_ascii_case(query)
+                || a.assay_id.eq_ignore_ascii_case(query)
+        })
+        .cloned()
 }
 
 /// Human-friendly display name for a catalogued assay, from its spec filename — with the
