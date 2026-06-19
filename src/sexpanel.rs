@@ -71,7 +71,12 @@ pub fn revcomp(seq: &[u8]) -> Vec<u8> {
 /// window. Returns `false` (without calling `hit`) when the read is shorter than `k`.
 /// The one k-mer scan skeleton shared by the sex ([`crate::sex`]) and species
 /// ([`crate::speciespanel`]) scanners — they differ only in the per-window lookup.
-pub(crate) fn scan_windows(seq: &[u8], k: usize, buf: &mut Vec<u8>, mut hit: impl FnMut(&[u8])) -> bool {
+pub(crate) fn scan_windows(
+    seq: &[u8],
+    k: usize,
+    buf: &mut Vec<u8>,
+    mut hit: impl FnMut(&[u8]),
+) -> bool {
     if seq.len() < k {
         return false;
     }

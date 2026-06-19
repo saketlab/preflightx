@@ -141,6 +141,9 @@ mod detect {
         declared: Option<&str>,
         n: usize,
     ) -> anyhow::Result<SpeciesReport> {
+        if cat.is_empty() {
+            return Ok(detect_species(&[], cat, declared));
+        }
         let reads = crate::sex::sample_cdna(r1, r2, n)?;
         Ok(detect_species(&reads, cat, declared))
     }
@@ -258,6 +261,16 @@ mod tests {
         let r = detect_species(&reads, &cat, Some("human"));
         assert_eq!(r.called, "unknown");
         assert!(!r.mislabel); // never flag a mislabel on an unknown call
+    }
+
+    #[test]
+    fn empty_catalogue_auto_path_does_not_open_fastq() {
+        let cat = crate::speciespanel::Catalogue::from_texts(&[]);
+        let missing = std::path::Path::new("/tmp/preflightx-missing.fastq");
+        let r = detect_species_auto(missing, None, &cat, Some("human"), 1_000).unwrap();
+        assert_eq!(r.called, "unknown");
+        assert_eq!(r.reads_scanned, 0);
+        assert_eq!(r.n_species_in_panel, 0);
     }
 
     #[test]

@@ -82,7 +82,11 @@ pub fn fetch_panels() -> Result<()> {
     if any_failed {
         println!("{}", "Some panels could not be downloaded.".yellow());
     }
-    println!("{} panels listed; cache directory: {}", names.len(), dir.display());
+    println!(
+        "{} panels listed; cache directory: {}",
+        names.len(),
+        dir.display()
+    );
     Ok(())
 }
 
@@ -168,14 +172,36 @@ fn fetch_into(
 }
 
 fn download_one(client: &reqwest::blocking::Client, url: &str, target: &Path) -> Result<usize> {
-    let resp = client
+    let mut resp = client
         .get(url)
         .send()
         .with_context(|| format!("GET {url}"))?;
     if !resp.status().is_success() {
         return Err(anyhow!("HTTP {}", resp.status()));
     }
-    let bytes = resp.bytes()?;
-    fs::write(target, &bytes).with_context(|| format!("writing {}", target.display()))?;
-    Ok(bytes.len())
+
+    let tmp = target.with_file_name(format!(
+        ".{}.tmp",
+        target
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_else(|| "download".into())
+    ));
+    let result = (|| -> Result<usize> {
+        let mut out =
+            fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+        let n = std::io::copy(&mut resp, &mut out).with_context(|| format!("downloading {url}"))?;
+        out.flush()
+            .with_context(|| format!("flushing {}", tmp.display()))?;
+        if target.exists() {
+            let _ = fs::remove_file(target);
+        }
+        fs::rename(&tmp, target)
+            .with_context(|| format!("moving {} to {}", tmp.display(), target.display()))?;
+        usize::try_from(n).context("downloaded object too large for this platform")
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
 }

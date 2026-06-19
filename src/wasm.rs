@@ -46,9 +46,9 @@ fn wl_cache() -> Option<&'static Path> {
 
 /// Stash R1/R2 in the vfs, run `f` against the synthetic paths, then drop the read
 /// buffers (loaded onlists persist across runs).
-fn with_pair<T>(r1: &[u8], r2: &[u8], f: impl FnOnce() -> T) -> T {
-    fastq::vfs::put(R1, r1.to_vec());
-    fastq::vfs::put(R2, r2.to_vec());
+fn with_pair<T>(r1: Vec<u8>, r2: Vec<u8>, f: impl FnOnce() -> T) -> T {
+    fastq::vfs::put(R1, r1);
+    fastq::vfs::put(R2, r2);
     let out = f();
     fastq::vfs::remove(R1);
     fastq::vfs::remove(R2);
@@ -58,7 +58,7 @@ fn with_pair<T>(r1: &[u8], r2: &[u8], f: impl FnOnce() -> T) -> T {
 /// Whitelist filenames matching the pair's R1 geometry, as a JSON array. The
 /// front-end fetches each and passes it back through [`load_whitelist`].
 #[wasm_bindgen]
-pub fn needed_whitelists(r1: &[u8], r2: &[u8], n_reads: usize) -> Result<String, JsValue> {
+pub fn needed_whitelists(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, JsValue> {
     let files = with_pair(r1, r2, || {
         chemistry::candidate_whitelist_files(Path::new(R1), Path::new(R2), n_reads)
     });
@@ -68,8 +68,8 @@ pub fn needed_whitelists(r1: &[u8], r2: &[u8], n_reads: usize) -> Result<String,
 /// Stash a fetched onlist (raw `.txt.gz` or plain bytes) for later [`check`]s.
 /// Cached across runs so it is fetched once per session.
 #[wasm_bindgen]
-pub fn load_whitelist(name: &str, bytes: &[u8]) {
-    fastq::vfs::put(&format!("{WL_DIR}/{name}"), bytes.to_vec());
+pub fn load_whitelist(name: &str, bytes: Vec<u8>) {
+    fastq::vfs::put(&format!("{WL_DIR}/{name}"), bytes);
 }
 
 /// Onlists `detect_assay` can score, as JSON `[{cache_name, url}]`. The front-end
@@ -81,11 +81,11 @@ pub fn onlist_sources() -> Result<String, JsValue> {
 
 /// Stash R1 always and R2 only when non-empty (single-end input), run `f` with a
 /// flag for whether R2 is present, then drop the read buffers.
-fn with_reads<T>(r1: &[u8], r2: &[u8], f: impl FnOnce(bool) -> T) -> T {
-    fastq::vfs::put(R1, r1.to_vec());
+fn with_reads<T>(r1: Vec<u8>, r2: Vec<u8>, f: impl FnOnce(bool) -> T) -> T {
+    fastq::vfs::put(R1, r1);
     let has_r2 = !r2.is_empty();
     if has_r2 {
-        fastq::vfs::put(R2, r2.to_vec());
+        fastq::vfs::put(R2, r2);
     }
     let out = f(has_r2);
     fastq::vfs::remove(R1);
@@ -98,7 +98,7 @@ fn with_reads<T>(r1: &[u8], r2: &[u8], f: impl FnOnce(bool) -> T) -> T {
 /// Full report for an R1/R2 pair, or for a single read when `r2` is empty.
 /// `r1`/`r2` are the raw uploaded file bytes (gzip is auto-detected).
 #[wasm_bindgen]
-pub fn check(r1: &[u8], r2: &[u8], n_reads: usize) -> Result<String, JsValue> {
+pub fn check(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, JsValue> {
     with_reads(r1, r2, |has_r2| {
         if has_r2 {
             run_check(n_reads)
@@ -154,7 +154,7 @@ fn run_check(n: usize) -> Result<String, JsValue> {
 
 /// Generic seqspec-driven assay ranking (geometry + linker anchors).
 #[wasm_bindgen]
-pub fn detect_assay(r1: &[u8], r2: &[u8], n_reads: usize) -> Result<String, JsValue> {
+pub fn detect_assay(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, JsValue> {
     let result = with_pair(r1, r2, || {
         assaydetect::detect(Path::new(R1), Path::new(R2), n_reads).map_err(err_to_js)
     });
@@ -163,7 +163,7 @@ pub fn detect_assay(r1: &[u8], r2: &[u8], n_reads: usize) -> Result<String, JsVa
 
 /// 10x chemistry detection only. Uses a stashed onlist when one is loaded.
 #[wasm_bindgen]
-pub fn chem(r1: &[u8], r2: &[u8], n_reads: usize) -> Result<String, JsValue> {
+pub fn chem(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, JsValue> {
     let result = with_pair(r1, r2, || {
         chemistry::detect(Path::new(R1), Path::new(R2), n_reads, wl_cache()).map_err(err_to_js)
     });
@@ -195,7 +195,7 @@ pub fn sex_species() -> Result<String, JsValue> {
 /// `r2` is empty); `sex_reads` is sampled deeper than the other checks because Y/XIST
 /// are sparse (native default 200000).
 #[wasm_bindgen]
-pub fn sex(r1: &[u8], r2: &[u8], species: &str, sex_reads: usize) -> Result<String, JsValue> {
+pub fn sex(r1: Vec<u8>, r2: Vec<u8>, species: &str, sex_reads: usize) -> Result<String, JsValue> {
     let result = with_reads(r1, r2, |has_r2| {
         let r2_path = has_r2.then(|| Path::new(R2));
         sex::detect_sex_auto(Path::new(R1), r2_path, species, sex_reads).map_err(err_to_js)
@@ -211,8 +211,8 @@ pub fn sex(r1: &[u8], r2: &[u8], species: &str, sex_reads: usize) -> Result<Stri
 /// pool, yields a clean "unavailable" no-call.
 #[wasm_bindgen]
 pub fn sex_with_panel(
-    r1: &[u8],
-    r2: &[u8],
+    r1: Vec<u8>,
+    r2: Vec<u8>,
     species: &str,
     spanel_text: &str,
     sex_reads: usize,

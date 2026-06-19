@@ -313,6 +313,9 @@ pub fn detect_sex_auto_cat(
     species: &str,
     n_reads: usize,
 ) -> Result<SexReport> {
+    if cat.is_empty() {
+        return detect_sex_auto(r1, r2, species, n_reads);
+    }
     let reads = sample_cdna(r1, r2, n_reads)?;
     let panel = cat
         .for_species(species)
