@@ -292,7 +292,7 @@
       <label class="n">reads to sample <input type="number" id="nreads" value="50000" min="1000" step="1000" /></label>
       <button id="btnCheck" disabled hidden>Run full check</button>
       <button id="btnAssay" class="sec" disabled hidden>Detect assay</button>
-      <div class="sexrow">
+      <div class="sexrow" id="sexRow">
         <label class="sexopt">
           <input type="checkbox" id="sexToggle" />
           also infer genetic sex
@@ -339,6 +339,13 @@ import init, { check, detect_assay, needed_whitelists, load_whitelist, onlist_so
 let PANELS = [];
 let autoSpecies = null;            // {scientific, spanel, common} detected for the current accession
 const panelTextCache = new Map();  // spanel filename -> fetched .spanel text
+// Load eagerly, not behind wasm init(), so an early accession entry can't race it.
+const panelsReady = (async () => {
+  try {
+    const r = await fetch('data/panels.json');
+    if (r.ok) PANELS = (await r.json()).panels || [];
+  } catch {}
+})();
 
 function normSpecies(s) { return String(s || '').trim().toLowerCase().replace(/\s+/g, '_'); }
 function findPanel(scientific) {
@@ -378,6 +385,7 @@ const els = {
   nreads: document.getElementById('nreads'),
   sexToggle: document.getElementById('sexToggle'), sexAdv: document.getElementById('sexAdv'),
   sexSpecies: document.getElementById('sexSpecies'), sexReads: document.getElementById('sexReads'),
+  sexRow: document.getElementById('sexRow'), controls: document.querySelector('.controls'),
   exSpecies: document.getElementById('exSpecies'),
   btnCheck: document.getElementById('btnCheck'), btnAssay: document.getElementById('btnAssay'),
   status: document.getElementById('status'),
@@ -424,6 +432,8 @@ function setMode(next) {
   els.btnCheck.hidden = acc;
   els.btnAssay.hidden = acc;
   els.verdict.style.display = acc ? 'none' : '';
+  // accession mode places sexRow under "Run all"; other modes need it back in controls.
+  if (!acc && els.sexRow.parentElement !== els.controls) els.controls.appendChild(els.sexRow);
   refresh();
 }
 for (const m of MODES) m.tab.addEventListener('click', () => setMode(m.mode));
@@ -836,10 +846,7 @@ els.sexToggle.addEventListener('change', () => {
 // labelled by common name. Sourced from the panel provenance file (data/panels.json),
 // the same file the native `fetch-panels` and the server deploy use.
 async function populateExamples() {
-  try {
-    const r = await fetch('data/panels.json');
-    if (r.ok) PANELS = (await r.json()).panels || [];
-  } catch { /* dropdown just stays at its single placeholder */ }
+  await panelsReady;
   const opts = PANELS
     .filter(p => p.example_run)
     .map(p => ({ run: p.example_run, label: `${p.common_name || p.scientific_name} — ${p.scientific_name.replace(/_/g, ' ')}` }))
@@ -1066,7 +1073,7 @@ function renderRunsTable(study, data, runs) {
   const wrap = document.createElement('div');
   wrap.className = 'table-wrap';
   wrap.append(table);
-  els.runsWrap.replaceChildren(head, wrap);
+  els.runsWrap.replaceChildren(head, els.sexRow, wrap);
 
   runAll.addEventListener('click', async () => {
     runAll.disabled = true;
@@ -1089,6 +1096,7 @@ function clearAutoSpecies() {
 async function autoSelectSpecies(run) {
   try {
     clearAutoSpecies();
+    await panelsReady;
     if (!run || !run.experiment_accession) return;
     const exp = await apiJson(`/experiment/${run.experiment_accession}`);
     const samp = (exp.samples || [])[0];
