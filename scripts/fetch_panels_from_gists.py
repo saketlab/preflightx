@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Download every .spanel from its public gist into the web mirror dir.
+"""
 from __future__ import annotations
 
 import argparse
@@ -9,29 +11,18 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-API = "https://api.github.com/gists/{gist_id}"
+RAW = "https://gist.githubusercontent.com/{owner}/{gist_id}/raw/{name}"
 
 
-def _req(url: str) -> urllib.request.Request:
-    headers = {"User-Agent": "preflightx-fetch-panels"}
-    token = os.environ.get("GITHUB_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return urllib.request.Request(url, headers=headers)
-
-
-def fetch(panel: dict, out: Path) -> tuple[str, bool, str]:
+def fetch(panel: dict, out: Path, owner: str) -> tuple[str, bool, str]:
     name = panel["spanel"]
     dst = out / name
     if dst.exists() and dst.stat().st_size > 1024:
         return name, True, "cached"
+    url = RAW.format(owner=owner, gist_id=panel["gist_id"], name=name)
+    req = urllib.request.Request(url, headers={"User-Agent": "preflightx-fetch-panels"})
     try:
-        with urllib.request.urlopen(
-            _req(API.format(gist_id=panel["gist_id"])), timeout=60
-        ) as r:
-            meta = json.load(r)
-        f = meta["files"].get(name) or next(iter(meta["files"].values()))
-        with urllib.request.urlopen(_req(f["raw_url"]), timeout=120) as r:
+        with urllib.request.urlopen(req, timeout=120) as r:
             data = r.read()
         if len(data) < 1024:
             return name, False, "too small"
@@ -45,6 +36,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--prov", type=Path, default="web/data/panels.json")
     ap.add_argument("--out", type=Path, default="web/data/panels")
+    ap.add_argument("--owner", default=os.environ.get("GIST_OWNER", "saketkc"))
     ap.add_argument("--workers", type=int, default=8)
     args = ap.parse_args()
 
@@ -54,7 +46,8 @@ def main() -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     ok = fail = 0
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        for fut in as_completed([ex.submit(fetch, p, args.out) for p in panels]):
+        futs = [ex.submit(fetch, p, args.out, args.owner) for p in panels]
+        for fut in as_completed(futs):
             name, good, msg = fut.result()
             ok += good
             fail += not good

@@ -75,8 +75,6 @@ jobs:
           restore-keys: panels-
 
       - name: Fetch species/sex panels from gists
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 scripts/fetch_panels_from_gists.py --out web/data/panels
           ls web/data/panels | wc -l
