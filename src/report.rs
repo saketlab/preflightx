@@ -45,6 +45,12 @@ impl FullReport {
         Ok((chem, assay))
     }
 
+    /// Self-contained HTML report. Routes through `serde_json::Value` so
+    /// [`crate::reporthtml`] is the only renderer for both CLI and web.
+    pub fn to_html(&self) -> String {
+        crate::reporthtml::render(&serde_json::to_value(self).unwrap_or(serde_json::Value::Null))
+    }
+
     pub fn print(&self) {
         println!("{}", "preflightx full report".bold().bright_blue());
         println!("  R1: {}", self.r1);

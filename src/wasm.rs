@@ -227,6 +227,15 @@ pub fn sex_with_panel(
     to_js(&result?)
 }
 
+/// Render an HTML report from a report object or array, via the same renderer as
+/// the CLI's `check --html`.
+#[wasm_bindgen]
+pub fn report_html_json(json: &str) -> Result<String, JsValue> {
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(crate::reporthtml::render(&v))
+}
+
 /// The embedded seqspec assay catalogue (no reads required).
 #[wasm_bindgen]
 pub fn assays() -> Result<String, JsValue> {

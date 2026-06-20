@@ -6,10 +6,26 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use crate::sex::SexReport;
 use crate::{
     assaydetect, chemistry, composition, fastq, report, sex, size, species, speciespanel,
     whitelists,
 };
+
+/// Sparse-signal detectors (sex, species) under-call on shallow samples. Run `score(n)`,
+/// and if the result is still `weak`, resample once at 2x depth before accepting it.
+fn deepen_if_weak<T>(
+    n: usize,
+    weak: impl Fn(&T) -> bool,
+    mut score: impl FnMut(usize) -> Result<T>,
+) -> Result<T> {
+    let first = score(n)?;
+    if weak(&first) {
+        score(n * 2)
+    } else {
+        Ok(first)
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "preflightx", version, about, long_about = None)]
@@ -25,9 +41,11 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
-    /// Declared species (e.g. human, mouse, Homo_sapiens). Drives the sex panel and,
-    /// for `species`/`check`, the mislabel flag. Sex defaults to human when unset;
-    /// the mislabel flag fires only when this is explicitly given.
+    /// Also write a self-contained HTML report to this path (`check` only).
+    #[arg(long, global = true, value_name = "PATH")]
+    html: Option<PathBuf>,
+
+    /// Declared species (e.g. human, mouse, Homo_sapiens). 
     #[arg(long, global = true)]
     species: Option<String>,
 
@@ -101,15 +119,29 @@ pub fn run() -> Result<()> {
             let catalogue = speciespanel::Catalogue::load()?;
             let (species_rep, sx) = if catalogue.is_empty() {
                 let sp = cli.species.as_deref().unwrap_or("human");
-                (
-                    None,
-                    sex::detect_sex_auto(&r1, r2.as_deref(), sp, cli.sex_reads)?,
-                )
+                let sx = deepen_if_weak(cli.sex_reads, SexReport::is_uncertain, |n| {
+                    sex::detect_sex_auto(&r1, r2.as_deref(), sp, n)
+                })?;
+                (None, sx)
             } else {
-                let reads = sex::sample_cdna(&r1, r2.as_deref(), cli.sex_reads)?;
-                let sp = species::detect_species(&reads, &catalogue, cli.species.as_deref());
-                let panel = catalogue.for_species(&sp.called);
-                let sx = sex::report_for_reads(panel, &sp.called, &reads);
+                // Species and sex share one read pass; resample at 2x and recompute both
+                // if either is weak (an "unknown" species also re-selects the sex panel).
+                let (sp, sx) = deepen_if_weak(
+                    cli.sex_reads,
+                    |(sp, sx): &(species::SpeciesReport, sex::SexReport)| {
+                        sp.is_unknown() || sx.is_uncertain()
+                    },
+                    |n| {
+                        let reads = sex::sample_cdna(&r1, r2.as_deref(), n)?;
+                        let sp = species::detect_species(&reads, &catalogue, cli.species.as_deref());
+                        let sx = sex::report_for_reads(
+                            catalogue.for_species(&sp.called),
+                            &sp.called,
+                            &reads,
+                        );
+                        Ok((sp, sx))
+                    },
+                )?;
                 (Some(sp), sx)
             };
             let r = report::FullReport {
@@ -123,6 +155,10 @@ pub fn run() -> Result<()> {
                 species: species_rep,
                 sex: Some(sx),
             };
+            if let Some(path) = &cli.html {
+                std::fs::write(path, r.to_html())?;
+                eprintln!("wrote HTML report to {}", path.display());
+            }
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {
@@ -167,7 +203,9 @@ pub fn run() -> Result<()> {
             // paired-end bulk, or the sole file for single-end. Prefers a cached panel.
             let sp = cli.species.as_deref().unwrap_or("human");
             let catalogue = speciespanel::Catalogue::load()?;
-            let s = sex::detect_sex_auto_cat(&r1, r2.as_deref(), &catalogue, sp, cli.sex_reads)?;
+            let s = deepen_if_weak(cli.sex_reads, SexReport::is_uncertain, |n| {
+                sex::detect_sex_auto_cat(&r1, r2.as_deref(), &catalogue, sp, n)
+            })?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&s)?);
             } else {
@@ -176,13 +214,9 @@ pub fn run() -> Result<()> {
         }
         Cmd::Species { r1, r2 } => {
             let catalogue = speciespanel::Catalogue::load()?;
-            let s = species::detect_species_auto(
-                &r1,
-                r2.as_deref(),
-                &catalogue,
-                cli.species.as_deref(),
-                cli.sex_reads,
-            )?;
+            let s = deepen_if_weak(cli.sex_reads, species::SpeciesReport::is_unknown, |n| {
+                species::detect_species_auto(&r1, r2.as_deref(), &catalogue, cli.species.as_deref(), n)
+            })?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&s)?);
             } else {

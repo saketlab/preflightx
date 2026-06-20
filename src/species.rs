@@ -172,6 +172,11 @@ mod detect {
 pub use detect::{detect_species, detect_species_auto};
 
 impl SpeciesReport {
+    /// No catalogued species cleared the hit threshold — off-panel, or too few reads.
+    pub fn is_unknown(&self) -> bool {
+        self.called == "unknown"
+    }
+
     pub fn print(&self) {
         use colored::Colorize;
         println!("{}", "Species identification".bold().cyan());

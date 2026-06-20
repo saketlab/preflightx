@@ -15,6 +15,7 @@ pub mod composition;
 pub mod fastq;
 pub mod libstruct;
 pub mod report;
+pub mod reporthtml;
 pub mod sex;
 pub mod sexpanel;
 pub mod size;

@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>preflightx: single-cell FASTQ pre-flight, in your browser</title>
-<meta name="description" content="Detect single-cell chemistry and assay geometry from FASTQ read pairs. Runs entirely in your browser." />
+<meta name="description" content="Paste an accession or drop a FASTQ — preflightx reads a single-cell library’s chemistry, assay, species and genetic sex against 50+ catalogued assays, entirely in your browser. Nothing is uploaded." />
 <link rel="canonical" href="https://preflightx.saketlab.org/" />
 <meta name="author" content="Saket Choudhary (saketlab.org)" />
 <meta name="theme-color" content="#f4f1e8" media="(prefers-color-scheme: light)" />
@@ -15,17 +15,17 @@
 <meta property="og:site_name" content="preflightx" />
 <meta property="og:url" content="https://preflightx.saketlab.org/" />
 <meta property="og:title" content="preflightx: single-cell FASTQ pre-flight in your browser" />
-<meta property="og:description" content="Detect single-cell chemistry and assay geometry from FASTQ read pairs. Runs entirely in your browser." />
+<meta property="og:description" content="Paste an accession or drop a FASTQ — preflightx reads a single-cell library’s chemistry, assay, species and genetic sex against 50+ catalogued assays, entirely in your browser. Nothing is uploaded." />
 <meta property="og:image" content="https://preflightx.saketlab.org/og.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
-<meta property="og:image:alt" content="preflightx: a read drawn as coloured cell-barcode, UMI and cDNA blocks." />
+<meta property="og:image:alt" content="preflightx social card: a single-cell read drawn as cell-barcode, UMI and cDNA segments resolving into the detected verdicts — 10x Chromium 3′ v3, Homo sapiens and genetic sex." />
 
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:site" content="@saketkc" />
 <meta name="twitter:creator" content="@saketkc" />
 <meta name="twitter:title" content="preflightx: single-cell FASTQ pre-flight in your browser" />
-<meta name="twitter:description" content="Detect single-cell chemistry and assay geometry from FASTQ read pairs. Runs entirely in your browser." />
+<meta name="twitter:description" content="Paste an accession or drop a FASTQ — preflightx reads a single-cell library’s chemistry, assay, species and genetic sex against 50+ catalogued assays, entirely in your browser. Nothing is uploaded." />
 <meta name="twitter:image" content="https://preflightx.saketlab.org/og.png" />
 <style>
   :root {
@@ -111,6 +111,26 @@
   .runs-head .meta { color: var(--muted); font-size: 13px; }
   tr.detail > td { padding: 0 10px 14px; background: var(--panel2); }
   tr.detail .why { margin-top: 4px; }
+  /* Phones: runs table reflows to one card per run, cells labelled by header. */
+  @media (max-width: 560px) {
+    .table-wrap { overflow-x: visible; }
+    table.runs, table.runs tbody { display: block; }
+    table.runs thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    table.runs tr { display: block; border: 1px solid var(--line); border-radius: 10px;
+                    background: var(--panel); padding: 4px 14px; margin-top: 10px; }
+    table.runs tr[hidden] { display: none; }
+    table.runs tr.detail { background: var(--panel2); border-top: 0; border-radius: 0 0 10px 10px;
+                           margin-top: -10px; padding: 0 14px 14px; }
+    table.runs td { display: flex; gap: 12px; justify-content: space-between; align-items: baseline;
+                    border: 0; padding: 7px 0; text-align: right; overflow-wrap: anywhere; min-width: 0; }
+    table.runs td::before { content: attr(data-label); flex: 0 0 auto; text-align: left;
+                            color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    table.runs td.act { padding-top: 10px; }
+    table.runs td.act::before { content: none; }
+    table.runs td.act .run { width: 100%; }
+    table.runs tr.detail td { display: block; text-align: left; padding: 0; }
+    table.runs tr.detail td::before { content: none; }
+  }
   .why-toggle {
     background: none; border: 0; color: var(--accent); font: inherit; font-size: 12px;
     padding: 4px 8px; margin-left: 6px; cursor: pointer; white-space: nowrap;
@@ -156,14 +176,31 @@
   .vmain.warn { color: var(--insert); }
   .sexrow { display: flex; align-items: center; gap: 14px; margin-top: 10px; flex-wrap: wrap;
             padding-top: 10px; border-top: 1px dashed var(--line); width: 100%; }
-  .sexopt { display: inline-flex; align-items: center; gap: 8px; color: var(--fg);
-            font-size: 14px; cursor: pointer; }
-  .sexopt input { width: 16px; height: 16px; min-height: 0; accent-color: var(--accent); cursor: pointer; }
+  .sexopt { display: inline-flex; align-items: center; gap: 10px; color: var(--fg);
+            font-size: 14px; cursor: pointer; min-height: 44px; user-select: none; }
+  /* Toggle switch built on the native checkbox (kept for state + a11y). */
+  .switch-input { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; }
+  .switch { position: relative; flex: 0 0 auto; width: 42px; height: 24px; border-radius: 999px;
+            background: var(--line); transition: background .15s ease; }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px;
+                   border-radius: 50%; background: var(--panel); box-shadow: 0 1px 2px rgba(0,0,0,.25);
+                   transition: transform .15s ease; }
+  .switch-input:checked + .switch { background: var(--accent); }
+  .switch-input:checked + .switch::after { transform: translateX(18px); }
+  .switch-input:focus-visible + .switch { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .switch-input:disabled + .switch { opacity: .5; }
+  .sexopt:has(.switch-input:disabled) { cursor: default; opacity: .7; }
   .sexadv { display: inline-flex; align-items: center; gap: 14px; flex-wrap: wrap; }
   .sexadv[hidden] { display: none; }
   .sexadv select { background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
                    border-radius: 6px; padding: 7px 9px; font: inherit; min-height: 44px; }
   .sexnote { color: var(--muted); font-size: 12px; font-style: italic; flex-basis: 100%; }
+  @media (max-width: 560px) {
+    .sexopt { flex-basis: 100%; }
+    .sexadv { flex-basis: 100%; flex-direction: column; align-items: stretch; gap: 10px; }
+    .sexadv .n { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .sexadv select, .sexadv input[type=number] { width: 55%; }
+  }
   .sexblock { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
   .sexblock h3 { margin: 0 0 8px; font-family: var(--ui); font-size: 15px; color: var(--fg); font-weight: 600; }
   .sexverdict { font-family: var(--ui); font-size: 20px; font-weight: 600; }
@@ -172,6 +209,8 @@
   .sexverdict.uncertain { color: var(--warn); }
   .sexverdict.unknown { color: var(--muted); }
   .sexcaveat { color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+  .sexna { color: var(--muted); font-size: 13.5px; background: var(--panel2); border: 1px solid var(--line);
+           border-radius: 8px; padding: 10px 12px; }
   .controls { display: flex; align-items: center; gap: 14px; margin-top: 16px; flex-wrap: wrap; }
   label.n { color: var(--muted); font-size: 14px; }
   input[type=number] {
@@ -187,8 +226,13 @@
   button:disabled { opacity: .5; cursor: default; }
   .status { color: var(--muted); font-size: 13px; margin-top: 12px; min-height: 18px; }
   .status.err { color: var(--bad); }
-  .verdict { display: none; }
+  .verdict { display: none; position: relative; }
   .verdict.show { display: block; }
+  .export { position: absolute; top: 16px; right: 16px; font-size: 12.5px; padding: 5px 12px; }
+  /* Must follow the base .export rule so source order wins. */
+  @media (max-width: 560px) {
+    .export { position: static; display: block; width: 100%; margin: 0 0 12px; }
+  }
   .vhead { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; margin: 0; }
   .vmain { font-family: var(--ui); font-size: 24px; font-weight: 600; margin: 4px 0; }
   .pill { display: inline-block; padding: 2px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; }
@@ -222,12 +266,26 @@
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition: none !important; animation: none !important; }
   }
+  /* Rounding pass: overrides the legacy 6px corners. */
+  .card { border-radius: 12px; }
+  .drop, textarea, pre { border-radius: 10px; }
+  button, .tab, input[type=number], input[type=text], select, .stat, .why-toggle { border-radius: 8px; }
+  /* Phone layout. */
+  @media (max-width: 560px) {
+    header { padding: 22px 16px 6px; }
+    main { padding: 8px 16px 48px; }
+    h1 { font-size: 26px; }
+    .card { padding: 16px 14px; }
+    .controls { gap: 12px; }
+    .tabs .tab { flex: 1 1 auto; justify-content: center; }
+    .acc-row input[type=text] { flex-basis: 100%; }
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>preflight<span class="x">x</span></h1>
-  <div class="tag">Detect the chemistry of single-cell FASTQs.</div>
+  <div class="tag">Single-cell FASTQ pre-flight — chemistry, assay, species &amp; genetic sex.</div>
   <div class="priv">🔒 No data is stored. Runs in your browser.</div>
 </header>
 
@@ -294,7 +352,8 @@
       <button id="btnAssay" class="sec" disabled hidden>Detect assay</button>
       <div class="sexrow" id="sexRow">
         <label class="sexopt">
-          <input type="checkbox" id="sexToggle" />
+          <input type="checkbox" id="sexToggle" class="switch-input" />
+          <span class="switch" aria-hidden="true"></span>
           also infer genetic sex
         </label>
         <span class="sexadv" id="sexAdv" hidden>
@@ -310,6 +369,7 @@
   </div>
 
   <div class="card verdict" id="verdict">
+    <button class="sec export" id="btnExport" type="button" hidden>Export report</button>
     <h2 class="vhead" id="vhead">Result</h2>
     <div class="vmain" id="vmain">–</div>
     <div id="vconf"></div>
@@ -332,7 +392,20 @@
 </footer>
 
 <script type="module">
-import init, { check, detect_assay, needed_whitelists, load_whitelist, onlist_sources, sex, sex_with_panel, sex_species } from './pkg/preflightx.js';
+import init, { check, detect_assay, needed_whitelists, load_whitelist, onlist_sources, sex, sex_with_panel, sex_species, report_html_json } from './pkg/preflightx.js';
+
+// Last single-check report, kept for "Export report"; null after an assay-only detection.
+let lastReport = null;
+
+// Download a self-contained .html report from a report object or array (accession flow).
+function downloadReport(reportOrArray, filename) {
+  const html = report_html_json(JSON.stringify(reportOrArray));
+  const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 // Panel provenance (data/panels.json): scientific_name -> {spanel, common_name, example_run}.
 // Loaded once; drives the species example dropdown AND the automatic sex-panel pick.
@@ -388,6 +461,7 @@ const els = {
   sexRow: document.getElementById('sexRow'), controls: document.querySelector('.controls'),
   exSpecies: document.getElementById('exSpecies'),
   btnCheck: document.getElementById('btnCheck'), btnAssay: document.getElementById('btnAssay'),
+  btnExport: document.getElementById('btnExport'),
   status: document.getElementById('status'),
   verdict: document.getElementById('verdict'), vhead: document.getElementById('vhead'),
   vmain: document.getElementById('vmain'), vconf: document.getElementById('vconf'),
@@ -722,30 +796,60 @@ function renderCheck(r, ms) {
 async function runSex(b1, b2, setMsg) {
   if (!els.sexToggle.checked) return undefined;
   const sn = Math.max(1000, parseInt(els.sexReads.value, 10) || 200000);
-  // Auto path: a species detected from the accession → fetch its hosted panel and
-  // score against it (any catalogued species). Otherwise fall back to the embedded
-  // human/mouse panels selected in the dropdown (e.g. for direct file uploads).
-  if (autoSpecies && autoSpecies.spanel) {
-    setMsg(`fetching ${autoSpecies.common || autoSpecies.scientific} panel…`);
-    try {
-      const txt = await panelText(autoSpecies.spanel);
-      setMsg(`inferring genetic sex (first ${sn.toLocaleString()} reads)…`);
-      await new Promise(res => setTimeout(res, 0));
-      return JSON.parse(sex_with_panel(b1, b2, autoSpecies.scientific, txt, sn));
-    } catch (e) {
-      setMsg(`sex panel unavailable: ${e.message || e}`);
-      return undefined;
+  // Score n reads: hosted panel if deployed, else fall back to the embedded human/mouse
+  // panel. wasm returns a visible "no panel" no-call for uncovered species, never a throw.
+  const once = async n => {
+    if (autoSpecies && autoSpecies.spanel) {
+      try {
+        const txt = await panelText(autoSpecies.spanel);
+        return JSON.parse(sex_with_panel(b1, b2, autoSpecies.scientific, txt, n));
+      } catch {
+        setMsg('hosted panel unavailable; trying embedded panel…');
+        return JSON.parse(sex(b1, b2, autoSpecies.common || autoSpecies.scientific, n));
+      }
     }
+    return JSON.parse(sex(b1, b2, els.sexSpecies.value, n));
+  };
+  try {
+    setMsg(`inferring genetic sex (first ${sn.toLocaleString()} reads)…`);
+    await new Promise(res => setTimeout(res, 0));
+    let s = await once(sn);
+    // Y/XIST hits are sparse; an uncertain call is often just shallow. Retry once at 2x.
+    if (s && s.verdict === 'uncertain') {
+      setMsg(`uncertain — retrying at ${(2 * sn).toLocaleString()} reads…`);
+      await new Promise(res => setTimeout(res, 0));
+      s = await once(2 * sn);
+    }
+    return s;
+  } catch (e) {
+    // Surface failures as a visible state rather than vanishing.
+    return { verdict: 'error', _error: String((e && e.message) || e) };
   }
-  setMsg(`inferring genetic sex (first ${sn.toLocaleString()} reads)…`);
-  await new Promise(res => setTimeout(res, 0));
-  return JSON.parse(sex(b1, b2, els.sexSpecies.value, sn));
+}
+
+const SEX_HEAD = `<h3>Genetic sex <span style="color:var(--muted);font-weight:400;font-size:13px">· opt-in, sample-level signal</span></h3>`;
+
+// Single classifier for a sex report's display state, so renderSex and sexChip share one
+// precedence. Returns 'error' | 'no_panel' | 'male' | 'female' | 'uncertain' | 'unknown'.
+function sexState(s) {
+  if (s._error) return 'error';
+  if (s.panel_status === 'unsupported') return 'no_panel';
+  return ['male', 'female', 'uncertain', 'unknown'].includes(s.verdict) ? s.verdict : 'unknown';
 }
 
 function renderSex(el, s) {
-  if (!s) { el.hidden = true; el.innerHTML = ''; return; }
-  // Whitelist the verdict before it reaches the unescaped class attribute below.
-  const v = ['male', 'female', 'uncertain', 'unknown'].includes(s.verdict) ? s.verdict : 'unknown';
+  if (!s) { el.hidden = true; el.innerHTML = ''; return; }  // genuinely not requested
+  el.hidden = false;
+  const v = sexState(s);
+  // Requested but no verdict: say why, never silently disappear.
+  if (v === 'error' || v === 'no_panel') {
+    const sp = escapeHtml(s.species || 'this organism');
+    const msg = v === 'error'
+      ? `Couldn't run — ${escapeHtml(s._error)}. Re-run the analysis to retry.`
+      : `Not available for <b>${sp}</b> — ${escapeHtml((s.notes && s.notes[0]) || `no sex-marker panel for ${s.species || 'this organism'}`)}`;
+    el.innerHTML = `${SEX_HEAD}<div class="sexna">${msg}</div>`;
+    return;
+  }
   const ratio = s.y_xist_ratio != null ? (+s.y_xist_ratio).toFixed(2) : '–';
   const ledger = (s.y_per_gene || []).map(([g, c]) => `${escapeHtml(g)}:${c}`).join(', ');
   const caveats = [];
@@ -755,7 +859,7 @@ function renderSex(el, s) {
     caveats.push('Both Y and XIST signals strong; pooled both-sex sample or XXY?');
   for (const n of (s.notes || [])) caveats.push(escapeHtml(n));
   el.innerHTML = `
-    <h3>Genetic sex <span style="color:var(--muted);font-weight:400;font-size:13px">· opt-in, sample-level signal</span></h3>
+    ${SEX_HEAD}
     <div><span class="sexverdict ${v}">${escapeHtml(v)}</span> &nbsp; ${pill(s.confidence)}</div>
     <div class="grid" style="margin-top:12px">
       ${stat('species', escapeHtml(s.species) + (s.panel_status ? ` (${escapeHtml(s.panel_status)})` : ''))}
@@ -766,8 +870,22 @@ function renderSex(el, s) {
       ${ledger ? stat(`Y genes hit (${s.y_per_gene.length})`, ledger) : ''}
     </div>
     ${caveats.length ? `<div class="sexcaveat">${caveats.map(c => `· ${c}`).join('<br>')}</div>` : ''}`;
-  el.hidden = false;
 }
+
+// Per-row sex outcome for the study table (verdict, or why there's none).
+function sexChip(s) {
+  if (!s) return '';
+  const muted = t => ` <span style="color:var(--muted)">· ${escapeHtml(t)}</span>`;
+  const v = sexState(s);
+  if (v === 'error') return muted('sex: couldn’t run');
+  if (v === 'no_panel') return muted('sex: no panel');
+  if (v === 'male' || v === 'female') {
+    const col = v === 'female' ? 'var(--insert)' : 'var(--accent)';
+    return ` <span style="color:${col};font-weight:650">${v === 'female' ? '♀' : '♂'} ${v}</span>`;
+  }
+  return muted(`sex: ${v}`);
+}
+
 function renderAssay(r, ms) {
   const top = (r.hits && r.hits[0]) || {};
   els.vhead.textContent = 'Top assay (seqspec catalogue)';
@@ -828,6 +946,9 @@ async function run(kind) {
     const ms = performance.now() - t0;
     els.raw.textContent = JSON.stringify(r, null, 2);
     (kind === 'check' ? renderCheck : renderAssay)(r, ms);
+    // Export only for the full check report, not assay-only detection.
+    lastReport = kind === 'check' ? r : null;
+    els.btnExport.hidden = !lastReport;
     els.verdict.classList.add('show');
     setStatus(`done, analyzed in ${fmtDur(ms)}.`);
   } catch (e) {
@@ -838,6 +959,9 @@ async function run(kind) {
 }
 els.btnCheck.addEventListener('click', () => run('check'));
 els.btnAssay.addEventListener('click', () => run('assay'));
+els.btnExport.addEventListener('click', () => {
+  if (lastReport) downloadReport(lastReport, 'preflightx-report.html');
+});
 
 els.sexToggle.addEventListener('change', () => {
   els.sexAdv.hidden = !els.sexToggle.checked;
@@ -977,6 +1101,8 @@ async function runOne(ctx) {
     const sx = await runSex(b1, b2, m => { ctx.resCell.textContent = m; });
     if (sx) r.sex = sx;
     const ms = performance.now() - t0;
+    r._label = ctx.run.run_accession;
+    ctx.report = r;
     const c = r.chemistry || {};
     const singleEnd = !r.chemistry;
     const sampled = c.reads_sampled ?? r.size?.r1?.n_reads_sampled ?? 0;
@@ -995,6 +1121,8 @@ async function runOne(ctx) {
         ? ` <span style="color:var(--muted)">CB${c.cb_len}+UMI${c.umi_len}</span>` : '';
       ctx.resCell.innerHTML = `${escapeHtml(c.assay_display || c.assay_id || 'unknown')} ${pill(c.confidence)}${geom}${reads}`;
     }
+    // When sex was requested, show its outcome inline (verdict, or why there's none).
+    if (els.sexToggle.checked) ctx.resCell.innerHTML += sexChip(sx);
     ctx.why.replaceChildren();
     const trackDiv = document.createElement('div'); ctx.why.append(trackDiv); renderTrack(trackDiv, c);
     const plotsDiv = document.createElement('div'); plotsDiv.className = 'plots'; ctx.why.append(plotsDiv); renderPlots(plotsDiv, r);
@@ -1039,24 +1167,31 @@ function renderRunsTable(study, data, runs) {
   meta.textContent = `${study} · ${data.paired_runs} paired / ${data.single_runs} single`;
   const runAll = document.createElement('button');
   runAll.textContent = 'Run all';
-  head.append(meta, runAll);
+  const exportBtn = document.createElement('button');
+  exportBtn.className = 'sec';
+  exportBtn.textContent = 'Export report';
+  exportBtn.disabled = true;
+  head.append(meta, exportBtn, runAll);
 
   const table = document.createElement('table');
   table.className = 'runs';
   table.innerHTML = '<thead><tr><th scope="col">run</th><th scope="col">layout</th><th scope="col">FASTQ</th><th scope="col"><span class="sr-only">action</span></th><th scope="col">result</th></tr></thead>';
   const tb = document.createElement('tbody');
   const ctxs = [];
+  // Run a row, then enable export once it has a report.
+  const runCtx = async ctx => { await runOne(ctx); if (ctx.report) exportBtn.disabled = false; };
   for (const run of runs) {
     const reads = pickReads(run.fastq_ftp);
     const tr = document.createElement('tr');
-    const tdAcc = document.createElement('td'); tdAcc.className = 'acc'; tdAcc.textContent = run.run_accession;
-    const tdLay = document.createElement('td'); tdLay.textContent = (run.library_layout || '–').toLowerCase();
+    const tdAcc = document.createElement('td'); tdAcc.className = 'acc'; tdAcc.dataset.label = 'run'; tdAcc.textContent = run.run_accession;
+    const tdLay = document.createElement('td'); tdLay.dataset.label = 'layout'; tdLay.textContent = (run.library_layout || '–').toLowerCase();
     const tdFiles = document.createElement('td');
+    tdFiles.dataset.label = 'FASTQ';
     tdFiles.style.cssText = 'font-size:12px;color:var(--muted)';
     tdFiles.textContent = reads ? reads.map(u => u.split('/').pop()).join('  +  ') : 'no FASTQ';
-    const tdBtn = document.createElement('td');
+    const tdBtn = document.createElement('td'); tdBtn.className = 'act';
     const btn = document.createElement('button'); btn.className = 'run sec'; btn.textContent = 'Run';
-    const tdRes = document.createElement('td'); tdRes.className = 'res';
+    const tdRes = document.createElement('td'); tdRes.className = 'res'; tdRes.dataset.label = 'result';
     if (!reads) { btn.disabled = true; tdRes.textContent = 'no FASTQ'; }
     tdBtn.append(btn);
     tr.append(tdAcc, tdLay, tdFiles, tdBtn, tdRes);
@@ -1067,7 +1202,7 @@ function renderRunsTable(study, data, runs) {
     tb.append(tr, detailTr);
     const ctx = { run, reads, btn, resCell: tdRes, detailTr, why, soleRun: runs.length === 1 };
     ctxs.push(ctx);
-    btn.addEventListener('click', () => runOne(ctx));
+    btn.addEventListener('click', () => runCtx(ctx));
   }
   table.append(tb);
   const wrap = document.createElement('div');
@@ -1075,12 +1210,17 @@ function renderRunsTable(study, data, runs) {
   wrap.append(table);
   els.runsWrap.replaceChildren(head, els.sexRow, wrap);
 
+  exportBtn.addEventListener('click', () => {
+    const reports = ctxs.map(c => c.report).filter(Boolean);
+    if (reports.length) downloadReport(reports, `preflightx-${study}.html`);
+  });
+
   runAll.addEventListener('click', async () => {
     runAll.disabled = true;
     // Sequential on purpose: each run streams MBs from ENA and holds a slice plus
     // the onlist in wasm memory, so we don't fan out and spike memory/bandwidth.
     for (const ctx of ctxs) {
-      if (ctx.reads) await runOne(ctx);
+      if (ctx.reads) await runCtx(ctx);
     }
     runAll.disabled = false;
   });
@@ -1120,7 +1260,7 @@ async function autoSelectSpecies(run) {
       els.sexSpecies.add(opt);
       els.sexSpecies.value = name;
       els.accStatus.insertAdjacentHTML('beforeend',
-        ` · <span style="color:var(--bad)">${escapeHtml(name)}: no catalogued panel</span>`);
+        ` · <span style="color:var(--bad)">genetic sex: no panel for ${escapeHtml(name)}</span>`);
     }
   } catch {}
 }

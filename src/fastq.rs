@@ -140,8 +140,8 @@ fn open(path: &Path) -> Result<Box<dyn FastxReader>> {
     }
 }
 
-/// Pull the next record, or `None` at end of stream. Parse errors always surface
-/// as hard errors: callers should never mistake malformed FASTQ for clean EOF.
+/// Next record, or `None` at end of stream. A truncated final record reads as clean EOF
+/// (inputs are sliced/streamed, so a cut-off tail is expected); real malformation errors.
 fn next_record<'a>(
     reader: &'a mut dyn FastxReader,
     path: &Path,
@@ -149,10 +149,19 @@ fn next_record<'a>(
     match reader.next() {
         Some(Ok(r)) => Ok(Some(r)),
         None => Ok(None),
+        Some(Err(e)) if is_truncation(&e) => Ok(None),
         Some(Err(e)) => {
             Err(anyhow::Error::new(e)).with_context(|| format!("parsing {}", path.display()))
         }
     }
+}
+
+/// Truncation: a truncated FASTQ record (`UnexpectedEnd`) or gzip EOF (`Io`, which
+/// needletail 0.5.1 only exposes via the message). `truncated_gzip_error_shape_is_pinned`
+/// guards the message match against a version bump.
+fn is_truncation(e: &needletail::errors::ParseError) -> bool {
+    use needletail::errors::ParseErrorKind::{Io, UnexpectedEnd};
+    matches!(e.kind, UnexpectedEnd) || (matches!(e.kind, Io) && e.msg.contains("unexpected end of file"))
 }
 
 /// Iterate up to `n` records from a fastq(.gz) file or URL, calling `cb` with (seq, qual).
@@ -281,6 +290,57 @@ pub(crate) fn round2(x: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::testutil::write_fastq;
+
+    /// A gzipped FASTQ cut mid-stream. Large enough to span several decode buffers, else
+    /// the cut fixture decodes to nothing.
+    fn truncated_gzip_fixture() -> Vec<u8> {
+        use flate2::{write::GzEncoder, Compression};
+        use std::io::Write;
+        let fq = crate::testutil::fastq_bytes(&crate::testutil::fixed_len_reads(30, 50_000));
+        let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(&fq).unwrap();
+        let mut gz = enc.finish().unwrap();
+        gz.truncate(gz.len() * 7 / 10);
+        gz
+    }
+
+    #[test]
+    fn truncated_gzip_samples_complete_records_then_stops() {
+        let mut p = std::env::temp_dir();
+        p.push(format!("preflightx_{}_trunc.fastq.gz", std::process::id()));
+        std::fs::write(&p, truncated_gzip_fixture()).unwrap();
+        let result = sample(&p, 10_000);
+        std::fs::remove_file(&p).ok();
+
+        let (seqs, _) = result.expect("truncated gzip must sample cleanly, not error");
+        assert!(!seqs.is_empty(), "expected the complete leading records");
+        assert!(seqs.len() < 50_000, "truncation should drop the tail records");
+    }
+
+    /// Pins the error shape `is_truncation` matches on, so a needletail bump fails here.
+    #[test]
+    fn truncated_gzip_error_shape_is_pinned() {
+        use needletail::errors::ParseErrorKind;
+        let mut p = std::env::temp_dir();
+        p.push(format!("preflightx_{}_shape.fastq.gz", std::process::id()));
+        std::fs::write(&p, truncated_gzip_fixture()).unwrap();
+        let mut reader = needletail::parse_fastx_file(&p).unwrap();
+        let err = loop {
+            match reader.next() {
+                Some(Ok(_)) => continue,
+                Some(Err(e)) => break e,
+                None => panic!("expected a truncation error from the cut gzip"),
+            }
+        };
+        std::fs::remove_file(&p).ok();
+        assert!(is_truncation(&err));
+        assert!(
+            matches!(err.kind, ParseErrorKind::Io) && err.msg.contains("unexpected end of file"),
+            "needletail truncation error shape changed: {:?} / {}",
+            err.kind,
+            err.msg
+        );
+    }
 
     #[test]
     fn paired_stream_rejects_mismatched_mate_lengths() {

@@ -389,6 +389,11 @@ fn is_barcode_read(path: &Path) -> Result<bool> {
 }
 
 impl SexReport {
+    /// A borderline call that a deeper read sample might resolve.
+    pub fn is_uncertain(&self) -> bool {
+        self.verdict == "uncertain"
+    }
+
     pub fn print(&self) {
         println!("{}", "Genetic sex (sample-level)".bold().cyan());
         let v = match self.verdict.as_str() {

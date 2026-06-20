@@ -1,8 +1,10 @@
-# Hostinger (Apache / LiteSpeed) serving rules for the preflightx static site.
+# Apache / LiteSpeed serving rules. 
 
-# WebAssembly must arrive with the right MIME type or the browser refuses to
-# stream-compile it.
 AddType application/wasm .wasm
+
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE application/wasm application/javascript text/javascript text/css text/html image/svg+xml application/json
+</IfModule>
 
 # Serve the barcode onlists as raw gzip. Without this the server may tag them
 # Content-Encoding: gzip and the browser would decode them in flight; the wasm

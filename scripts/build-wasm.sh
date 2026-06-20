@@ -47,5 +47,12 @@ if command -v wasm-opt >/dev/null 2>&1; then
   fi
 fi
 
+# Precompress for nginx gzip_static/brotli_static.
+echo ">> precompressing bundle (gzip$(command -v brotli >/dev/null 2>&1 && echo ' + brotli'))"
+for f in "$OUT_DIR/preflightx_bg.wasm" "$OUT_DIR/preflightx.js"; do
+  gzip -9 -k -f "$f"
+  command -v brotli >/dev/null 2>&1 && brotli -q 11 -f -o "$f.br" "$f"
+done
+
 echo ">> done -> $OUT_DIR/"
 ls -lh "$OUT_DIR"
