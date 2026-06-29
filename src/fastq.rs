@@ -161,7 +161,8 @@ fn next_record<'a>(
 /// guards the message match against a version bump.
 fn is_truncation(e: &needletail::errors::ParseError) -> bool {
     use needletail::errors::ParseErrorKind::{Io, UnexpectedEnd};
-    matches!(e.kind, UnexpectedEnd) || (matches!(e.kind, Io) && e.msg.contains("unexpected end of file"))
+    matches!(e.kind, UnexpectedEnd)
+        || (matches!(e.kind, Io) && e.msg.contains("unexpected end of file"))
 }
 
 /// Iterate up to `n` records from a fastq(.gz) file or URL, calling `cb` with (seq, qual).
@@ -314,7 +315,10 @@ mod tests {
 
         let (seqs, _) = result.expect("truncated gzip must sample cleanly, not error");
         assert!(!seqs.is_empty(), "expected the complete leading records");
-        assert!(seqs.len() < 50_000, "truncation should drop the tail records");
+        assert!(
+            seqs.len() < 50_000,
+            "truncation should drop the tail records"
+        );
     }
 
     /// Pins the error shape `is_truncation` matches on, so a needletail bump fails here.

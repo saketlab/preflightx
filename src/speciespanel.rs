@@ -2,13 +2,13 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::fs;
 
-use crate::sexpanel::{self, revcomp, SexPanel};
+use crate::sexpanel::{self, encode_kmer, revcomp, SexPanel};
 use crate::species::same_species;
 use crate::whitelists;
 
 pub struct Catalogue {
     panels: Vec<SexPanel>,
-    autosomal: HashMap<Vec<u8>, u16>,
+    autosomal: HashMap<u128, u16>,
 }
 
 impl Catalogue {
@@ -57,7 +57,10 @@ impl Catalogue {
         &self.panels[idx as usize].species
     }
     pub fn autosomal_hit(&self, kmer: &[u8]) -> Option<u16> {
-        self.autosomal.get(kmer).copied()
+        encode_kmer(kmer).and_then(|key| self.autosomal_hit_encoded(key))
+    }
+    pub(crate) fn autosomal_hit_encoded(&self, key: u128) -> Option<u16> {
+        self.autosomal.get(&key).copied()
     }
     pub fn for_species(&self, name: &str) -> Option<&SexPanel> {
         self.panels.iter().find(|p| same_species(&p.species, name))
@@ -66,15 +69,19 @@ impl Catalogue {
 
 fn push_panel(
     panels: &mut Vec<SexPanel>,
-    autosomal: &mut HashMap<Vec<u8>, u16>,
+    autosomal: &mut HashMap<u128, u16>,
     panel: SexPanel,
     auto: Vec<Vec<u8>>,
 ) {
     let idx = panels.len() as u16;
     for kmer in auto {
         let rc = revcomp(&kmer);
-        autosomal.entry(kmer).or_insert(idx);
-        autosomal.entry(rc).or_insert(idx);
+        if let Some(key) = encode_kmer(&kmer) {
+            autosomal.entry(key).or_insert(idx);
+        }
+        if let Some(key) = encode_kmer(&rc) {
+            autosomal.entry(key).or_insert(idx);
+        }
     }
     panels.push(panel);
 }

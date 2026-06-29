@@ -252,3 +252,14 @@ pub fn describe(assay: &str) -> Result<String, JsValue> {
         ))),
     }
 }
+
+/// Structured library description matching CLI `describe --json`.
+#[wasm_bindgen]
+pub fn describe_json(assay: &str) -> Result<String, JsValue> {
+    match assaydetect::find_assay(assay) {
+        Some(a) => to_js(&assaydetect::describe_json(&a)),
+        None => Err(JsValue::from_str(&format!(
+            "no catalogued assay matching {assay}"
+        ))),
+    }
+}

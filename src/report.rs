@@ -27,6 +27,41 @@ pub struct FullReport {
     pub sex: Option<SexReport>,
 }
 
+/// Trimmed report for the `detect-all` subcommand: chemistry + species + sex only.
+#[derive(Serialize)]
+pub struct DetectAllReport {
+    pub r1: String,
+    pub r2: Option<String>,
+    /// `None` for single-end input (chemistry needs both mates).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chemistry: Option<ChemReport>,
+    /// `None` when no species panels are cached.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub species: Option<SpeciesReport>,
+    pub sex: SexReport,
+}
+
+impl DetectAllReport {
+    pub fn print(&self) {
+        println!("{}", "preflightx detect-all".bold().bright_blue());
+        println!("  R1: {}", self.r1);
+        if let Some(r2) = &self.r2 {
+            println!("  R2: {}", r2);
+        }
+        println!();
+        if let Some(chem) = &self.chemistry {
+            chem.print();
+            println!();
+        }
+        if let Some(species) = &self.species {
+            species.print();
+            println!();
+        }
+        self.sex.print();
+        println!();
+    }
+}
+
 impl FullReport {
     /// Run chem; when it finds no 10x/Drop-seq match, fall back to the generic
     /// seqspec detector. Shared by the CLI and web builds.

@@ -82,27 +82,31 @@ struct Tally {
     gene_reads: Vec<u64>, // indexed by SexPanel::genes
 }
 
-/// Accumulate one read's Y / XIST marker hits into `t`. `buf`/`read_genes` are
-/// caller-owned scratch reused across reads to avoid per-read allocation.
+/// Accumulate marker hits for one read into `t`. `seen_genes` and
+/// `read_genes` are caller-owned scratch reused across reads to avoid allocation.
 fn count_read(
     panel: &SexPanel,
     seq: &[u8],
     t: &mut Tally,
-    buf: &mut Vec<u8>,
+    seen_genes: &mut [bool],
     read_genes: &mut Vec<u16>,
 ) {
     t.scanned += 1;
     read_genes.clear();
     let mut hit_male = false;
     let mut hit_female = false;
-    let scanned = crate::sexpanel::scan_windows(seq, panel.k, buf, |w| {
-        if let Some((cat, idx)) = panel.get(w) {
+    let scanned = crate::sexpanel::scan_encoded_windows(seq, panel.k, |key| {
+        if let Some((cat, idx)) = panel.get_encoded(key) {
             match cat {
                 Category::Female => hit_female = true,
                 Category::Male => {
                     hit_male = true;
-                    if !read_genes.contains(&idx) {
-                        read_genes.push(idx);
+                    let slot = idx as usize;
+                    if let Some(already_seen) = seen_genes.get_mut(slot) {
+                        if !*already_seen {
+                            *already_seen = true;
+                            read_genes.push(idx);
+                        }
                     }
                 }
             }
@@ -116,6 +120,7 @@ fn count_read(
     t.xist_hit_reads += hit_female as u64;
     for &idx in read_genes.iter() {
         t.gene_reads[idx as usize] += 1;
+        seen_genes[idx as usize] = false;
     }
 }
 
@@ -132,10 +137,10 @@ fn new_tally(panel: &SexPanel) -> Tally {
 /// Stream the leading `n_reads` of `cdna` and accumulate Y / XIST marker hits into
 /// `t` (the only I/O). Called once per cDNA read, so paired-end bulk sums both mates.
 fn scan_into(panel: &SexPanel, cdna: &Path, n_reads: usize, t: &mut Tally) -> Result<()> {
-    let mut buf: Vec<u8> = Vec::new();
+    let mut seen_genes = vec![false; panel.genes.len()];
     let mut read_genes: Vec<u16> = Vec::with_capacity(panel.genes.len());
     fastq::for_each_record(cdna, n_reads, |seq, _| {
-        count_read(panel, seq, t, &mut buf, &mut read_genes);
+        count_read(panel, seq, t, &mut seen_genes, &mut read_genes);
     })?;
     Ok(())
 }
@@ -163,10 +168,10 @@ pub fn report_for_reads(panel: Option<&SexPanel>, species: &str, reads: &[Vec<u8
         );
     }
     let mut t = new_tally(panel);
-    let mut buf: Vec<u8> = Vec::new();
+    let mut seen_genes = vec![false; panel.genes.len()];
     let mut read_genes: Vec<u16> = Vec::with_capacity(panel.genes.len());
     for seq in reads {
-        count_read(panel, seq, &mut t, &mut buf, &mut read_genes);
+        count_read(panel, seq, &mut t, &mut seen_genes, &mut read_genes);
     }
     analyze(panel, species, &t)
 }

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
+use std::io::BufRead;
 use std::path::Path;
 
 use crate::assay::{AnchorMotif, AssaySpec, ASSAYS, TSO_PRESENT};
@@ -482,17 +483,19 @@ fn fits_barcode_len(len: usize) -> bool {
     !crate::libstruct::sc_geometries_matching(len, 2).is_empty()
 }
 
+fn uppercase_key(bytes: &[u8]) -> Vec<u8> {
+    if bytes.iter().any(|b| b.is_ascii_lowercase()) {
+        bytes.iter().map(|b| b.to_ascii_uppercase()).collect()
+    } else {
+        bytes.to_vec()
+    }
+}
+
 fn extract_cb_candidates(seqs: &[Vec<u8>], offset: usize, len: usize) -> HashSet<Vec<u8>> {
-    let mut set = HashSet::new();
+    let mut set = HashSet::with_capacity(seqs.len());
     for s in seqs {
         if s.len() >= offset + len {
-            let mut cb = s[offset..offset + len].to_vec();
-            for b in &mut cb {
-                if b.is_ascii_lowercase() {
-                    *b -= 32;
-                }
-            }
-            set.insert(cb);
+            set.insert(uppercase_key(&s[offset..offset + len]));
         }
     }
     set
@@ -545,23 +548,30 @@ fn load_whitelist_opt(path: &Path, cb_len: usize) -> Result<Option<HashSet<Vec<u
     )?))
 }
 
+fn trim_ascii(mut line: &[u8]) -> &[u8] {
+    while line.first().is_some_and(|b| b.is_ascii_whitespace()) {
+        line = &line[1..];
+    }
+    while line.last().is_some_and(|b| b.is_ascii_whitespace()) {
+        line = &line[..line.len() - 1];
+    }
+    line
+}
+
 /// Read one barcode per line, keying on the uppercased first `cb_len` bytes.
-fn parse_whitelist<R: std::io::BufRead>(reader: R, cb_len: usize) -> Result<HashSet<Vec<u8>>> {
+fn parse_whitelist<R: BufRead>(mut reader: R, cb_len: usize) -> Result<HashSet<Vec<u8>>> {
     // 10x onlists run to several million barcodes; preallocate to avoid rehashing.
     let mut set = HashSet::with_capacity(4_000_000);
-    for line in reader.lines() {
-        let line = line?;
-        let line = line.trim();
-        if line.len() < cb_len {
-            continue;
+    let mut line = Vec::with_capacity(128);
+    loop {
+        line.clear();
+        if reader.read_until(10, &mut line)? == 0 {
+            break;
         }
-        let mut k: Vec<u8> = line.bytes().take(cb_len).collect();
-        for b in &mut k {
-            if b.is_ascii_lowercase() {
-                *b -= 32;
-            }
+        let line = trim_ascii(&line);
+        if line.len() >= cb_len {
+            set.insert(uppercase_key(&line[..cb_len]));
         }
-        set.insert(k);
     }
     Ok(set)
 }

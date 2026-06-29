@@ -12,9 +12,16 @@ pub fn render(v: &Value) -> String {
     let (body, sub) = match v {
         Value::Array(items) => (
             items.iter().map(section).collect::<String>(),
-            format!("{} report{}", items.len(), if items.len() == 1 { "" } else { "s" }),
+            format!(
+                "{} report{}",
+                items.len(),
+                if items.len() == 1 { "" } else { "s" }
+            ),
         ),
-        _ => (section(v), label(v).unwrap_or_else(|| "single report".into())),
+        _ => (
+            section(v),
+            label(v).unwrap_or_else(|| "single report".into()),
+        ),
     };
     document(&body, &sub)
 }
@@ -36,7 +43,14 @@ fn section(r: &Value) -> String {
         let head = str_of(c, "assay_display")
             .or_else(|| str_of(c, "assay_id"))
             .unwrap_or_else(|| "unknown".into());
-        (head, str_of(c, "confidence").as_deref().map(pill).unwrap_or_default(), false)
+        (
+            head,
+            str_of(c, "confidence")
+                .as_deref()
+                .map(pill)
+                .unwrap_or_default(),
+            false,
+        )
     };
 
     let label_html = label(r)
@@ -119,7 +133,11 @@ fn stat_grid(r: &Value, chem: Option<&Value>, not_sc: bool) -> String {
     if let Some(v) = r.get("bulk_vs_sc").and_then(|b| str_of(b, "verdict")) {
         g.push(stat("library", &v));
     }
-    if let Some(p) = r.get("size").and_then(|s| s.get("r1")).and_then(|f| num_of(f, "mean_phred")) {
+    if let Some(p) = r
+        .get("size")
+        .and_then(|s| s.get("r1"))
+        .and_then(|f| num_of(f, "mean_phred"))
+    {
         g.push(stat("mean PHRED", &fnum(p)));
     }
     if let Some(c) = r.get("composition") {
@@ -155,7 +173,9 @@ fn sex_block(sex: Option<&Value>) -> String {
     };
     let mut g = Vec::new();
     if let Some(sp) = str_of(s, "species") {
-        let st = str_of(s, "panel_status").map(|p| format!(" ({p})")).unwrap_or_default();
+        let st = str_of(s, "panel_status")
+            .map(|p| format!(" ({p})"))
+            .unwrap_or_default();
         g.push(stat("species", &format!("{}{}", esc(&sp), esc(&st))));
     }
     for (key, lbl) in [
@@ -165,16 +185,28 @@ fn sex_block(sex: Option<&Value>) -> String {
         ("reads_scanned", "reads scanned"),
     ] {
         if let Some(n) = num_of(s, key) {
-            let val = if key == "reads_scanned" { group(n) } else { fnum(n) };
+            let val = if key == "reads_scanned" {
+                group(n)
+            } else {
+                fnum(n)
+            };
             g.push(stat(lbl, &val));
         }
     }
     let lead = format!(
         "<div><span class=\"sexverdict {cls}\">{}</span> {}</div>",
         esc(&verdict),
-        str_of(s, "confidence").as_deref().map(pill).unwrap_or_default(),
+        str_of(s, "confidence")
+            .as_deref()
+            .map(pill)
+            .unwrap_or_default(),
     );
-    detail_block("Genetic sex", "· opt-in, sample-level signal", &lead, &g.join(""))
+    detail_block(
+        "Genetic sex",
+        "· opt-in, sample-level signal",
+        &lead,
+        &g.join(""),
+    )
 }
 
 /// Shared shell for the genetic-sex and seqspec-assay sub-sections.
@@ -192,7 +224,11 @@ fn assay_block(assay: Option<&Value>) -> String {
     };
     let top = a.get("hits").and_then(|h| h.get(0));
     let name = top
-        .and_then(|t| str_of(t, "name").or_else(|| str_of(t, "assay_id")).or_else(|| str_of(t, "spec_file")))
+        .and_then(|t| {
+            str_of(t, "name")
+                .or_else(|| str_of(t, "assay_id"))
+                .or_else(|| str_of(t, "spec_file"))
+        })
         .unwrap_or_else(|| "no match".into());
     let mut g = Vec::new();
     if let Some(t) = top {
@@ -200,7 +236,10 @@ fn assay_block(assay: Option<&Value>) -> String {
             g.push(stat("orientation", &o));
         }
         if let (Some(e), Some(ob)) = (num_of(t, "expected_len"), num_of(t, "observed_len")) {
-            g.push(stat("expected / observed", &format!("{} / {} bp", fnum(e), fnum(ob))));
+            g.push(stat(
+                "expected / observed",
+                &format!("{} / {} bp", fnum(e), fnum(ob)),
+            ));
         }
         if let (Some(f), Some(tot)) = (num_of(t, "anchors_found"), num_of(t, "anchors_total")) {
             g.push(stat("anchors", &format!("{}/{}", fnum(f), fnum(tot))));
@@ -209,9 +248,17 @@ fn assay_block(assay: Option<&Value>) -> String {
     let lead = format!(
         "<div class=\"vmain\">{}</div>{}",
         esc(&name),
-        a.get("confidence").and_then(Value::as_str).map(pill).unwrap_or_default(),
+        a.get("confidence")
+            .and_then(Value::as_str)
+            .map(pill)
+            .unwrap_or_default(),
     );
-    detail_block("Best seqspec assay", "· geometry + linker anchors", &lead, &g.join(""))
+    detail_block(
+        "Best seqspec assay",
+        "· geometry + linker anchors",
+        &lead,
+        &g.join(""),
+    )
 }
 
 fn label(r: &Value) -> Option<String> {
@@ -219,7 +266,11 @@ fn label(r: &Value) -> Option<String> {
 }
 
 fn stat(k: &str, v: &str) -> String {
-    format!("<div class=\"stat\"><div class=\"k\">{}</div><div class=\"v\">{}</div></div>", esc(k), v)
+    format!(
+        "<div class=\"stat\"><div class=\"k\">{}</div><div class=\"v\">{}</div></div>",
+        esc(k),
+        v
+    )
 }
 
 fn pill(conf: &str) -> String {
@@ -248,7 +299,10 @@ fn fnum(n: f64) -> String {
     if n.fract().abs() < 1e-9 {
         format!("{}", n as i64)
     } else {
-        format!("{n:.2}").trim_end_matches('0').trim_end_matches('.').to_string()
+        format!("{n:.2}")
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
     }
 }
 
@@ -370,7 +424,10 @@ mod tests {
             .collect();
         hexes.sort();
         hexes.dedup();
-        assert!(hexes.len() >= 10, "expected the report's palette hexes, got {hexes:?}");
+        assert!(
+            hexes.len() >= 10,
+            "expected the report's palette hexes, got {hexes:?}"
+        );
         for h in hexes {
             assert!(
                 page.contains(h),

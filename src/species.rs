@@ -51,15 +51,19 @@ mod detect {
         let mut scanned = 0u64;
         let mut reads_with_hit = 0u64;
         let mut hit: Vec<u16> = Vec::new();
-        let mut up: Vec<u8> = Vec::new();
+        let mut seen = vec![false; cat.len()];
 
         for read in reads {
             scanned += 1;
             hit.clear();
-            crate::sexpanel::scan_windows(read, k, &mut up, |w| {
-                if let Some(idx) = cat.autosomal_hit(w) {
-                    if !hit.contains(&idx) {
-                        hit.push(idx);
+            crate::sexpanel::scan_encoded_windows(read, k, |key| {
+                if let Some(idx) = cat.autosomal_hit_encoded(key) {
+                    let slot = idx as usize;
+                    if let Some(already_seen) = seen.get_mut(slot) {
+                        if !*already_seen {
+                            *already_seen = true;
+                            hit.push(idx);
+                        }
                     }
                 }
             });
@@ -67,6 +71,7 @@ mod detect {
                 reads_with_hit += 1;
                 for &i in &hit {
                     counts[i as usize] += 1;
+                    seen[i as usize] = false;
                 }
             }
         }

@@ -500,6 +500,34 @@ fn parse_onlist(text: &str) -> std::collections::HashSet<Vec<u8>> {
         .collect()
 }
 
+fn set_contains_uppercase(
+    set: &std::collections::HashSet<Vec<u8>>,
+    bytes: &[u8],
+    scratch: &mut Vec<u8>,
+) -> bool {
+    if bytes.iter().any(|b| b.is_ascii_lowercase()) {
+        scratch.clear();
+        scratch.extend(bytes.iter().map(|b| b.to_ascii_uppercase()));
+        set.contains(scratch.as_slice())
+    } else {
+        set.contains(bytes)
+    }
+}
+
+fn revcomp_upper_into(seq: &[u8], out: &mut Vec<u8>) {
+    out.clear();
+    out.reserve(seq.len());
+    for &b in seq.iter().rev() {
+        out.push(match b {
+            65 | 97 => 84,
+            67 | 99 => 71,
+            71 | 103 => 67,
+            84 | 116 => 65,
+            _ => 78,
+        });
+    }
+}
+
 /// Summed onlist-overlap LLR (nats) plus a per-segment `(filename, hit_rate)`. Each
 /// barcode is matched forward and reverse-complemented (sequencer-dependent), and at
 /// every length for variable-length barcodes; the better orientation is scored.
@@ -516,6 +544,8 @@ fn onlist_overlap_llr(
             continue;
         };
         let (mut eligible, mut fwd, mut rev) = (0usize, 0usize, 0usize);
+        let mut fwd_scratch = Vec::new();
+        let mut rev_scratch = Vec::new();
         for r in obs {
             if r.len() < seg.offset + seg.len {
                 continue;
@@ -528,12 +558,10 @@ fn onlist_overlap_llr(
                 if r.len() < seg.offset + l {
                     break;
                 }
-                let bc: Vec<u8> = r[seg.offset..seg.offset + l]
-                    .iter()
-                    .map(u8::to_ascii_uppercase)
-                    .collect();
-                hit_fwd |= set.contains(&bc);
-                hit_rev |= set.contains(&crate::sexpanel::revcomp(&bc));
+                let bc = &r[seg.offset..seg.offset + l];
+                hit_fwd |= set_contains_uppercase(set, bc, &mut fwd_scratch);
+                revcomp_upper_into(bc, &mut rev_scratch);
+                hit_rev |= set.contains(rev_scratch.as_slice());
             }
             fwd += hit_fwd as usize;
             rev += hit_rev as usize;
@@ -736,6 +764,38 @@ pub fn describe(a: &Assay) -> String {
     }
     s.push_str(&format!("STARsolo: {}\n", crate::libstruct::starsolo(a)));
     s
+}
+
+/// Structured form of [`describe`] for `--json`.
+pub fn describe_json(a: &Assay) -> serde_json::Value {
+    let structural = a.structural_read().map(|(rid, layout)| {
+        let mut offset = 0usize;
+        let segments: Vec<_> = layout
+            .iter()
+            .map(|seg| {
+                let start = offset;
+                offset += seg.len;
+                serde_json::json!({
+                    "start": start,
+                    "end": offset,
+                    "region_type": seg.region_type,
+                    "region_id": seg.region_id,
+                    "onlist": seg.onlist.as_ref().map(|o| &o.filename),
+                    "sequence": seg.sequence,
+                })
+            })
+            .collect();
+        serde_json::json!({ "read_id": rid, "segments": segments })
+    });
+    serde_json::json!({
+        "assay_id": a.assay_id,
+        "spec_file": a.spec_file,
+        "name": a.name,
+        "modalities": a.modalities,
+        "lib_struct": a.lib_struct,
+        "structural_read": structural,
+        "starsolo": crate::libstruct::starsolo(a),
+    })
 }
 
 #[cfg(test)]

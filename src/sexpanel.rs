@@ -27,14 +27,21 @@ pub struct SexPanel {
     pub status: String,    // "validated" | "experimental"
     pub k: usize,
     pub genes: Vec<String>,
-    /// k-mer (both orientations stored) -> (category, index into `genes`)
-    kmers: HashMap<Vec<u8>, (Category, u16)>,
+    /// 2-bit encoded k-mer (both orientations stored) -> (category, index into `genes`)
+    kmers: HashMap<u128, (Category, u16)>,
+    #[cfg(test)]
+    sample_kmers: Vec<(Vec<u8>, Category)>,
 }
 
 impl SexPanel {
     /// Look up a read k-mer (either orientation is present in the map).
     pub fn get(&self, kmer: &[u8]) -> Option<(Category, u16)> {
-        self.kmers.get(kmer).copied()
+        encode_kmer(kmer).and_then(|key| self.get_encoded(key))
+    }
+
+    /// Look up an already 2-bit encoded read k-mer.
+    pub(crate) fn get_encoded(&self, key: u128) -> Option<(Category, u16)> {
+        self.kmers.get(&key).copied()
     }
     pub fn len(&self) -> usize {
         self.kmers.len()
@@ -46,9 +53,9 @@ impl SexPanel {
     /// One stored k-mer of the given category (for tests that synthesise reads).
     #[cfg(test)]
     pub(crate) fn sample(&self, cat: Category) -> Option<&[u8]> {
-        self.kmers
+        self.sample_kmers
             .iter()
-            .find(|(_, (c, _))| *c == cat)
+            .find(|(_, c)| *c == cat)
             .map(|(k, _)| k.as_slice())
     }
 }
@@ -67,23 +74,60 @@ pub fn revcomp(seq: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// Uppercase `seq` into the reusable `buf` and slide a k-window, calling `hit` for each
-/// window. Returns `false` (without calling `hit`) when the read is shorter than `k`.
-/// The one k-mer scan skeleton shared by the sex ([`crate::sex`]) and species
-/// ([`crate::speciespanel`]) scanners — they differ only in the per-window lookup.
-pub(crate) fn scan_windows(
-    seq: &[u8],
-    k: usize,
-    buf: &mut Vec<u8>,
-    mut hit: impl FnMut(&[u8]),
-) -> bool {
+#[inline]
+fn base_bits(b: u8) -> Option<u8> {
+    match b {
+        65 | 97 => Some(0),
+        67 | 99 => Some(1),
+        71 | 103 => Some(2),
+        84 | 116 => Some(3),
+        _ => None,
+    }
+}
+
+/// 2-bit encode one A/C/G/T k-mer. Ambiguous bases and k > 64 return `None`.
+pub(crate) fn encode_kmer(seq: &[u8]) -> Option<u128> {
+    if seq.len() > 64 {
+        return None;
+    }
+    let mut key = 0u128;
+    for &b in seq {
+        key = (key << 2) | base_bits(b)? as u128;
+    }
+    Some(key)
+}
+
+/// Slide a k-window over `seq`, calling `hit` with the 2-bit encoded key for each
+/// A/C/G/T-only window. Windows containing N or other ambiguous bases cannot match
+/// the marker tables, so they are skipped instead of hashed.
+///
+/// Returns `false` only when the read is shorter than `k`; a long all-N read still
+/// counts as scanned, matching the previous byte-slice lookup semantics.
+pub(crate) fn scan_encoded_windows(seq: &[u8], k: usize, mut hit: impl FnMut(u128)) -> bool {
     if seq.len() < k {
         return false;
     }
-    buf.clear();
-    buf.extend(seq.iter().map(|b| b.to_ascii_uppercase()));
-    for w in buf.windows(k) {
-        hit(w);
+    if k == 0 || k > 64 {
+        return true;
+    }
+    let mask = if k == 64 {
+        u128::MAX
+    } else {
+        (1u128 << (2 * k)) - 1
+    };
+    let mut key = 0u128;
+    let mut valid = 0usize;
+    for &b in seq {
+        if let Some(bits) = base_bits(b) {
+            key = ((key << 2) | bits as u128) & mask;
+            valid += 1;
+            if valid >= k {
+                hit(key);
+            }
+        } else {
+            key = 0;
+            valid = 0;
+        }
     }
     true
 }
@@ -92,7 +136,9 @@ fn parse_panel(text: &str) -> Option<SexPanel> {
     let mut meta: HashMap<&str, &str> = HashMap::new();
     let mut genes: Vec<String> = Vec::new();
     let mut gene_idx: HashMap<String, u16> = HashMap::new();
-    let mut kmers: HashMap<Vec<u8>, (Category, u16)> = HashMap::new();
+    let mut kmers: HashMap<u128, (Category, u16)> = HashMap::new();
+    #[cfg(test)]
+    let mut sample_kmers: Vec<(Vec<u8>, Category)> = Vec::new();
 
     for line in text.lines() {
         if line.is_empty() {
@@ -121,11 +167,19 @@ fn parse_panel(text: &str) -> Option<SexPanel> {
             (genes.len() - 1) as u16
         });
         // Store both orientations so a read's forward k-mer slice matches directly,
-        // without canonicalising (and allocating) per k-mer at scan time.
+        // without canonicalising per k-mer at scan time.
         let fwd = kmer.as_bytes().to_vec();
         let rc = revcomp(fwd.as_slice());
-        kmers.insert(fwd, (category, idx));
-        kmers.entry(rc).or_insert((category, idx));
+        if let Some(key) = encode_kmer(&fwd) {
+            kmers.insert(key, (category, idx));
+            #[cfg(test)]
+            if !sample_kmers.iter().any(|(_, c)| *c == category) {
+                sample_kmers.push((fwd.clone(), category));
+            }
+        }
+        if let Some(key) = encode_kmer(&rc) {
+            kmers.entry(key).or_insert((category, idx));
+        }
     }
 
     if kmers.is_empty() {
@@ -138,6 +192,8 @@ fn parse_panel(text: &str) -> Option<SexPanel> {
         k: meta.get("k").and_then(|s| s.parse().ok()).unwrap_or(50),
         genes,
         kmers,
+        #[cfg(test)]
+        sample_kmers,
     })
 }
 
@@ -154,8 +210,10 @@ pub(crate) fn parse_spanel(text: &str) -> Option<(SexPanel, Vec<Vec<u8>>)> {
     let mut meta: HashMap<&str, &str> = HashMap::new();
     let mut genes: Vec<String> = Vec::new();
     let mut gene_idx: HashMap<&str, u16> = HashMap::new();
-    let mut kmers: HashMap<Vec<u8>, (Category, u16)> = HashMap::new();
+    let mut kmers: HashMap<u128, (Category, u16)> = HashMap::new();
     let mut autosomal: Vec<Vec<u8>> = Vec::new();
+    #[cfg(test)]
+    let mut sample_kmers: Vec<(Vec<u8>, Category)> = Vec::new();
 
     for line in text.lines() {
         if line.is_empty() {
@@ -190,8 +248,16 @@ pub(crate) fn parse_spanel(text: &str) -> Option<(SexPanel, Vec<Vec<u8>>)> {
                 });
                 let fwd = kmer.as_bytes().to_vec();
                 let rc = revcomp(&fwd);
-                kmers.insert(fwd, (category, idx));
-                kmers.entry(rc).or_insert((category, idx));
+                if let Some(key) = encode_kmer(&fwd) {
+                    kmers.insert(key, (category, idx));
+                    #[cfg(test)]
+                    if !sample_kmers.iter().any(|(_, c)| *c == category) {
+                        sample_kmers.push((fwd.clone(), category));
+                    }
+                }
+                if let Some(key) = encode_kmer(&rc) {
+                    kmers.entry(key).or_insert((category, idx));
+                }
             }
             _ => continue,
         }
@@ -208,6 +274,8 @@ pub(crate) fn parse_spanel(text: &str) -> Option<(SexPanel, Vec<Vec<u8>>)> {
         k: meta.get("k").and_then(|s| s.parse().ok()).unwrap_or(50),
         genes,
         kmers,
+        #[cfg(test)]
+        sample_kmers,
     };
     Some((panel, autosomal))
 }

@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::sex::SexReport;
 use crate::{
@@ -27,6 +27,61 @@ fn deepen_if_weak<T>(
     }
 }
 
+/// Print a cache directory path, as `{"<key>": "<path>"}` under `--json`.
+fn print_dir(json: bool, key: &str, dir: &Path) {
+    if json {
+        println!("{}", serde_json::json!({ key: dir.display().to_string() }));
+    } else {
+        println!("{}", dir.display());
+    }
+}
+
+/// Accept `r1,r2` as a single comma-separated positional, or `r1 r2` as two.
+/// A lone arg with no comma is single-end (R2 = None).
+fn split_pair(r1: String, r2: Option<String>) -> (PathBuf, Option<PathBuf>) {
+    match r2 {
+        Some(r2) => (r1.into(), Some(r2.into())),
+        None => match r1.split_once(',') {
+            Some((a, b)) => (a.into(), Some(b.into())),
+            None => (r1.into(), None),
+        },
+    }
+}
+
+/// Species + sex from one cDNA read pass (resampled at 2x if either is weak).
+/// Shared by `check` and `detect-all`. Degrades to no-species/`--species`-default
+/// sex when no panels are cached.
+fn species_and_sex(
+    r1: &Path,
+    r2: Option<&Path>,
+    declared: Option<&str>,
+    sex_reads: usize,
+) -> Result<(Option<species::SpeciesReport>, sex::SexReport)> {
+    let catalogue = speciespanel::Catalogue::load()?;
+    if catalogue.is_empty() {
+        let sp = declared.unwrap_or("human");
+        let sx = deepen_if_weak(sex_reads, SexReport::is_uncertain, |n| {
+            sex::detect_sex_auto(r1, r2, sp, n)
+        })?;
+        Ok((None, sx))
+    } else {
+        let (sp, sx) = deepen_if_weak(
+            sex_reads,
+            |(sp, sx): &(species::SpeciesReport, sex::SexReport)| {
+                sp.is_unknown() || sx.is_uncertain()
+            },
+            |n| {
+                let reads = sex::sample_cdna(r1, r2, n)?;
+                let sp = species::detect_species(&reads, &catalogue, declared);
+                let sx =
+                    sex::report_for_reads(catalogue.for_species(&sp.called), &sp.called, &reads);
+                Ok((sp, sx))
+            },
+        )?;
+        Ok((Some(sp), sx))
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "preflightx", version, about, long_about = None)]
 struct Cli {
@@ -45,7 +100,7 @@ struct Cli {
     #[arg(long, global = true, value_name = "PATH")]
     html: Option<PathBuf>,
 
-    /// Declared species (e.g. human, mouse, Homo_sapiens). 
+    /// Declared species (e.g. human, mouse, Homo_sapiens).
     #[arg(long, global = true)]
     species: Option<String>,
 
@@ -58,6 +113,9 @@ struct Cli {
 enum Cmd {
     /// Run every check (chemistry + bulk-vs-sc + size + composition) and report.
     Check { r1: PathBuf, r2: Option<PathBuf> },
+    /// Detect chemistry + species + sex in one pass. R1/R2 may be two args or a
+    /// single comma-separated `r1.fq,r2.fq`. Single-end input skips chemistry.
+    DetectAll { r1: String, r2: Option<String> },
     /// 10x Chromium chemistry detection (R1 length + TSO + optional whitelist).
     Chem { r1: PathBuf, r2: PathBuf },
     /// Bulk RNA-seq vs single-cell library classification.
@@ -116,34 +174,8 @@ pub fn run() -> Result<()> {
             // Species first, then route sex to the *called* species' panel. Both scan the
             // same sampled cDNA reads (one read pass). With no panels cached we degrade to
             // the legacy behaviour: no species call, sex against the --species default.
-            let catalogue = speciespanel::Catalogue::load()?;
-            let (species_rep, sx) = if catalogue.is_empty() {
-                let sp = cli.species.as_deref().unwrap_or("human");
-                let sx = deepen_if_weak(cli.sex_reads, SexReport::is_uncertain, |n| {
-                    sex::detect_sex_auto(&r1, r2.as_deref(), sp, n)
-                })?;
-                (None, sx)
-            } else {
-                // Species and sex share one read pass; resample at 2x and recompute both
-                // if either is weak (an "unknown" species also re-selects the sex panel).
-                let (sp, sx) = deepen_if_weak(
-                    cli.sex_reads,
-                    |(sp, sx): &(species::SpeciesReport, sex::SexReport)| {
-                        sp.is_unknown() || sx.is_uncertain()
-                    },
-                    |n| {
-                        let reads = sex::sample_cdna(&r1, r2.as_deref(), n)?;
-                        let sp = species::detect_species(&reads, &catalogue, cli.species.as_deref());
-                        let sx = sex::report_for_reads(
-                            catalogue.for_species(&sp.called),
-                            &sp.called,
-                            &reads,
-                        );
-                        Ok((sp, sx))
-                    },
-                )?;
-                (Some(sp), sx)
-            };
+            let (species_rep, sx) =
+                species_and_sex(&r1, r2.as_deref(), cli.species.as_deref(), cli.sex_reads)?;
             let r = report::FullReport {
                 r1: r1.display().to_string(),
                 r2: r2.as_ref().map(|p| p.display().to_string()),
@@ -159,6 +191,30 @@ pub fn run() -> Result<()> {
                 std::fs::write(path, r.to_html())?;
                 eprintln!("wrote HTML report to {}", path.display());
             }
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                r.print();
+            }
+        }
+        Cmd::DetectAll { r1, r2 } => {
+            let (r1, r2) = split_pair(r1, r2);
+            let chemistry = r2
+                .as_deref()
+                .map(|r2p| {
+                    let cache = whitelists::cache_dir()?;
+                    chemistry::detect(&r1, r2p, cli.n_reads, Some(&cache))
+                })
+                .transpose()?;
+            let (species, sex) =
+                species_and_sex(&r1, r2.as_deref(), cli.species.as_deref(), cli.sex_reads)?;
+            let r = report::DetectAllReport {
+                r1: r1.display().to_string(),
+                r2: r2.as_ref().map(|p| p.display().to_string()),
+                chemistry,
+                species,
+                sex,
+            };
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&r)?);
             } else {
@@ -215,7 +271,13 @@ pub fn run() -> Result<()> {
         Cmd::Species { r1, r2 } => {
             let catalogue = speciespanel::Catalogue::load()?;
             let s = deepen_if_weak(cli.sex_reads, species::SpeciesReport::is_unknown, |n| {
-                species::detect_species_auto(&r1, r2.as_deref(), &catalogue, cli.species.as_deref(), n)
+                species::detect_species_auto(
+                    &r1,
+                    r2.as_deref(),
+                    &catalogue,
+                    cli.species.as_deref(),
+                    n,
+                )
             })?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&s)?);
@@ -253,6 +315,12 @@ pub fn run() -> Result<()> {
             }
         }
         Cmd::Describe { assay } => match assaydetect::find_assay(&assay) {
+            Some(a) if cli.json => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&assaydetect::describe_json(&a))?
+                )
+            }
             Some(a) => print!("{}", assaydetect::describe(&a)),
             None => {
                 eprintln!("no catalogued assay matching '{assay}'; try `preflightx assays`.");
@@ -261,16 +329,37 @@ pub fn run() -> Result<()> {
         },
         Cmd::FetchWhitelists => {
             whitelists::fetch_all()?;
+            print_dir(cli.json, "whitelist_dir", &whitelists::cache_dir()?);
         }
-        Cmd::WhitelistDir => {
-            println!("{}", whitelists::cache_dir()?.display());
-        }
+        Cmd::WhitelistDir => print_dir(cli.json, "whitelist_dir", &whitelists::cache_dir()?),
         Cmd::FetchPanels => {
             whitelists::fetch_panels()?;
+            print_dir(cli.json, "panel_dir", &whitelists::panel_cache_dir()?);
         }
-        Cmd::PanelDir => {
-            println!("{}", whitelists::panel_cache_dir()?.display());
-        }
+        Cmd::PanelDir => print_dir(cli.json, "panel_dir", &whitelists::panel_cache_dir()?),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_pair;
+    use std::path::PathBuf;
+
+    #[test]
+    fn split_pair_modes() {
+        let p = |s: &str| PathBuf::from(s);
+        // two args
+        assert_eq!(
+            split_pair("a.fq".into(), Some("b.fq".into())),
+            (p("a.fq"), Some(p("b.fq")))
+        );
+        // single comma-separated arg
+        assert_eq!(
+            split_pair("a.fq,b.fq".into(), None),
+            (p("a.fq"), Some(p("b.fq")))
+        );
+        // single-end
+        assert_eq!(split_pair("a.fq".into(), None), (p("a.fq"), None));
+    }
 }
