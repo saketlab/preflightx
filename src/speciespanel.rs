@@ -1,21 +1,21 @@
 use anyhow::Result;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::fs;
 
-use crate::sexpanel::{self, encode_kmer, revcomp, SexPanel};
+use crate::sexpanel::{self, encode_kmer, encode_kmer_both_strands, SexPanel};
 use crate::species::same_species;
 use crate::whitelists;
 
 pub struct Catalogue {
     panels: Vec<SexPanel>,
-    autosomal: HashMap<u128, u16>,
+    autosomal: FxHashMap<u128, u16>,
 }
 
 impl Catalogue {
     pub fn load() -> Result<Catalogue> {
         let dir = whitelists::panel_cache_dir()?;
         let mut panels = Vec::new();
-        let mut autosomal = HashMap::new();
+        let mut autosomal = FxHashMap::default();
         if dir.is_dir() {
             let mut files: Vec<_> = fs::read_dir(&dir)?
                 .filter_map(|e| e.ok())
@@ -35,7 +35,7 @@ impl Catalogue {
 
     pub fn from_texts(texts: &[&str]) -> Catalogue {
         let mut panels = Vec::new();
-        let mut autosomal = HashMap::new();
+        let mut autosomal = FxHashMap::default();
         for text in texts {
             if let Some((panel, auto)) = sexpanel::parse_spanel(text) {
                 push_panel(&mut panels, &mut autosomal, panel, auto);
@@ -69,18 +69,15 @@ impl Catalogue {
 
 fn push_panel(
     panels: &mut Vec<SexPanel>,
-    autosomal: &mut HashMap<u128, u16>,
+    autosomal: &mut FxHashMap<u128, u16>,
     panel: SexPanel,
     auto: Vec<Vec<u8>>,
 ) {
     let idx = panels.len() as u16;
     for kmer in auto {
-        let rc = revcomp(&kmer);
-        if let Some(key) = encode_kmer(&kmer) {
-            autosomal.entry(key).or_insert(idx);
-        }
-        if let Some(key) = encode_kmer(&rc) {
-            autosomal.entry(key).or_insert(idx);
+        if let Some((fwd, rc)) = encode_kmer_both_strands(&kmer) {
+            autosomal.entry(fwd).or_insert(idx);
+            autosomal.entry(rc).or_insert(idx);
         }
     }
     panels.push(panel);

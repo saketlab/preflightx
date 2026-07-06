@@ -12,6 +12,8 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use rustc_hash::FxHashMap;
+
 include!(concat!(env!("OUT_DIR"), "/sexpanels.rs")); // pub static EMBEDDED_PANELS
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -28,7 +30,7 @@ pub struct SexPanel {
     pub k: usize,
     pub genes: Vec<String>,
     /// 2-bit encoded k-mer (both orientations stored) -> (category, index into `genes`)
-    kmers: HashMap<u128, (Category, u16)>,
+    kmers: FxHashMap<u128, (Category, u16)>,
     #[cfg(test)]
     sample_kmers: Vec<(Vec<u8>, Category)>,
 }
@@ -48,6 +50,10 @@ impl SexPanel {
     }
     pub fn is_empty(&self) -> bool {
         self.kmers.is_empty()
+    }
+    /// Whether the panel carries any Y-linked (male) markers (XIST-only panels can't call males).
+    pub fn has_y(&self) -> bool {
+        self.kmers.values().any(|(c, _)| *c == Category::Male)
     }
 
     /// One stored k-mer of the given category (for tests that synthesise reads).
@@ -97,6 +103,23 @@ pub(crate) fn encode_kmer(seq: &[u8]) -> Option<u128> {
     Some(key)
 }
 
+/// Encode a k-mer and its reverse complement in one pass, without allocating the
+/// revcomp. The revcomp key is `sum_i comp(base_i) << 2i` where `comp = 3 - bits`
+/// (A<->T, C<->G). Ambiguous bases or k > 64 return `None`.
+pub(crate) fn encode_kmer_both_strands(seq: &[u8]) -> Option<(u128, u128)> {
+    if seq.len() > 64 {
+        return None;
+    }
+    let mut fwd = 0u128;
+    let mut rc = 0u128;
+    for (i, &b) in seq.iter().enumerate() {
+        let bits = base_bits(b)?;
+        fwd = (fwd << 2) | bits as u128;
+        rc |= ((3 - bits) as u128) << (2 * i);
+    }
+    Some((fwd, rc))
+}
+
 /// Slide a k-window over `seq`, calling `hit` with the 2-bit encoded key for each
 /// A/C/G/T-only window. Windows containing N or other ambiguous bases cannot match
 /// the marker tables, so they are skipped instead of hashed.
@@ -136,7 +159,7 @@ fn parse_panel(text: &str) -> Option<SexPanel> {
     let mut meta: HashMap<&str, &str> = HashMap::new();
     let mut genes: Vec<String> = Vec::new();
     let mut gene_idx: HashMap<String, u16> = HashMap::new();
-    let mut kmers: HashMap<u128, (Category, u16)> = HashMap::new();
+    let mut kmers: FxHashMap<u128, (Category, u16)> = FxHashMap::default();
     #[cfg(test)]
     let mut sample_kmers: Vec<(Vec<u8>, Category)> = Vec::new();
 
@@ -168,17 +191,13 @@ fn parse_panel(text: &str) -> Option<SexPanel> {
         });
         // Store both orientations so a read's forward k-mer slice matches directly,
         // without canonicalising per k-mer at scan time.
-        let fwd = kmer.as_bytes().to_vec();
-        let rc = revcomp(fwd.as_slice());
-        if let Some(key) = encode_kmer(&fwd) {
-            kmers.insert(key, (category, idx));
+        if let Some((fwd, rc)) = encode_kmer_both_strands(kmer.as_bytes()) {
+            kmers.insert(fwd, (category, idx));
+            kmers.entry(rc).or_insert((category, idx));
             #[cfg(test)]
             if !sample_kmers.iter().any(|(_, c)| *c == category) {
-                sample_kmers.push((fwd.clone(), category));
+                sample_kmers.push((kmer.as_bytes().to_vec(), category));
             }
-        }
-        if let Some(key) = encode_kmer(&rc) {
-            kmers.entry(key).or_insert((category, idx));
         }
     }
 
@@ -210,7 +229,7 @@ pub(crate) fn parse_spanel(text: &str) -> Option<(SexPanel, Vec<Vec<u8>>)> {
     let mut meta: HashMap<&str, &str> = HashMap::new();
     let mut genes: Vec<String> = Vec::new();
     let mut gene_idx: HashMap<&str, u16> = HashMap::new();
-    let mut kmers: HashMap<u128, (Category, u16)> = HashMap::new();
+    let mut kmers: FxHashMap<u128, (Category, u16)> = FxHashMap::default();
     let mut autosomal: Vec<Vec<u8>> = Vec::new();
     #[cfg(test)]
     let mut sample_kmers: Vec<(Vec<u8>, Category)> = Vec::new();
@@ -246,17 +265,13 @@ pub(crate) fn parse_spanel(text: &str) -> Option<(SexPanel, Vec<Vec<u8>>)> {
                     genes.push(gene.to_string());
                     (genes.len() - 1) as u16
                 });
-                let fwd = kmer.as_bytes().to_vec();
-                let rc = revcomp(&fwd);
-                if let Some(key) = encode_kmer(&fwd) {
-                    kmers.insert(key, (category, idx));
+                if let Some((fwd, rc)) = encode_kmer_both_strands(kmer.as_bytes()) {
+                    kmers.insert(fwd, (category, idx));
+                    kmers.entry(rc).or_insert((category, idx));
                     #[cfg(test)]
                     if !sample_kmers.iter().any(|(_, c)| *c == category) {
-                        sample_kmers.push((fwd.clone(), category));
+                        sample_kmers.push((kmer.as_bytes().to_vec(), category));
                     }
-                }
-                if let Some(key) = encode_kmer(&rc) {
-                    kmers.entry(key).or_insert((category, idx));
                 }
             }
             _ => continue,
@@ -309,6 +324,17 @@ mod tests {
     #[test]
     fn revcomp_basic() {
         assert_eq!(revcomp(b"AAAACCCGGT"), b"ACCGGGTTTT");
+    }
+
+    #[test]
+    fn both_strands_matches_reference() {
+        // The one-pass bit-trick must equal encode(fwd) + encode(revcomp).
+        for kmer in [b"A".as_slice(), b"ACGT", b"AAAACCCGGT", b"GTCAGTCAGT"] {
+            let (fwd, rc) = encode_kmer_both_strands(kmer).unwrap();
+            assert_eq!(Some(fwd), encode_kmer(kmer), "fwd {kmer:?}");
+            assert_eq!(Some(rc), encode_kmer(&revcomp(kmer)), "rc {kmer:?}");
+        }
+        assert_eq!(encode_kmer_both_strands(b"ACGTN"), None); // ambiguous base
     }
 
     #[test]

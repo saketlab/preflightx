@@ -392,7 +392,7 @@
 </footer>
 
 <script type="module">
-import init, { check, detect_assay, needed_whitelists, load_whitelist, onlist_sources, sex, sex_with_panel, sex_species, report_html_json } from './pkg/preflightx.js';
+import init, { check, detect_assay, needed_whitelists, load_whitelist, load_panel, onlist_sources, sex, sex_with_panel, sex_species, report_html_json } from './pkg/preflightx.js';
 
 // Last single-check report, kept for "Export report"; null after an assay-only detection.
 let lastReport = null;
@@ -551,15 +551,15 @@ async function gatherBytes() {
 // Fetch barcode lists in parallel and stash each in wasm memory, once per session.
 // Each entry tries its urls in order; all failures are non-fatal (detection falls
 // back to geometry + anchors).
-async function fetchAndLoad(entries) {
+async function fetchAndLoad(entries, sink = load_whitelist, seen = wlLoaded) {
   await Promise.all(entries.map(async ({ name, urls }) => {
-    if (wlLoaded.has(name)) return;
+    if (seen.has(name)) return;
     for (const url of urls) {
       try {
         const resp = await fetch(url);
         if (!resp.ok) continue;
-        load_whitelist(name, new Uint8Array(await resp.arrayBuffer()));
-        wlLoaded.add(name);
+        sink(name, new Uint8Array(await resp.arrayBuffer()));
+        seen.add(name);
         return;
       } catch {
       }
@@ -653,6 +653,21 @@ function renderPlots(el, r) {
     html += `<h3>Base composition (R2 cDNA)</h3><div class="track">${cells}</div>` +
       `<div class="bar-legend" style="margin-left:0">${legend}</div>`;
   }
+
+  // sc-vs-sn (nucpanel) and 3'/5' (endpanel) verdicts, shown when the panels were injected.
+  const nuc = r.nucleus, end = r.end;
+  let panelRows = '';
+  if (nuc && nuc.reads_scanned) {
+    panelRows += bar(`single-cell vs nucleus — <b>${escapeHtml(nuc.verdict)}</b> ${pill(nuc.confidence)}`,
+      nuc.intron_frac, 'var(--insert)', `intron ${(100 * nuc.intron_frac).toFixed(0)}%`);
+    if (nuc.mito_pct != null)
+      panelRows += bar('mitochondrial reads (cell ≫ nucleus)', nuc.mito_pct / 100, 'var(--poly)', nuc.mito_pct.toFixed(1) + '%');
+  }
+  if (end && end.reads_scanned) {
+    panelRows += bar(`transcript end — <b>${escapeHtml(end.end)}</b> bias ${pill(end.confidence)}`,
+      end.ratio, 'var(--umi)', `3′ ${(100 * end.ratio).toFixed(0)}%`);
+  }
+  if (panelRows) html += `<h3>Library type (k-mer panels)</h3>${panelRows}`;
 
   const qc = [];
   if (comp.gc_pct != null) qc.push(['GC content', comp.gc_pct, 'var(--cb)']);
@@ -762,12 +777,14 @@ function renderCheck(r, ms) {
   // No chemistry => a single read was uploaded (chemistry needs both mates).
   const singleEnd = !r.chemistry;
   const notSc = chem.is_single_cell === false;
+  const isAtac = chem.modality === 'atac';
   els.vhead.textContent = singleEnd ? 'Single read' : 'Chemistry';
   els.vmain.textContent = singleEnd
     ? 'Single-end / bulk input'
-    : (notSc ? 'Not single-cell' : (chem.assay_display || chem.assay_id || 'unknown'));
-  els.vmain.classList.toggle('warn', notSc && !singleEnd);
-  els.vconf.innerHTML = (singleEnd || notSc) ? '' : pill(chem.confidence);
+    : (isAtac ? (chem.assay_display || 'ATAC')
+      : (notSc ? 'Not single-cell' : (chem.assay_display || chem.assay_id || 'unknown')));
+  els.vmain.classList.toggle('warn', notSc && !isAtac && !singleEnd);
+  els.vconf.innerHTML = (singleEnd || (notSc && !isAtac)) ? '' : pill(chem.confidence);
   const g = [];
   if (!notSc && chem.cb_len != null) g.push(stat('barcode geometry', `CB ${chem.cb_len} + UMI ${chem.umi_len} (${chem.cb_read})`));
   if (chem.r1_length_dominant != null) g.push(stat('R1 dominant len', chem.r1_length_dominant + ' bp'));
@@ -933,6 +950,7 @@ async function run(kind) {
       setStatus('fetching barcode onlists…');
       await ensureOnlists();
     }
+    if (kind === 'check') await kmerPanelsReady;   // ensure sc/sn + 3'/5' panels are injected
     setStatus(`analyzing first ${n.toLocaleString()} reads…`);
     // Yield so the status paints before the synchronous wasm call.
     await new Promise(r => setTimeout(r, 0));
@@ -1095,6 +1113,7 @@ async function runOne(ctx) {
     const b2 = bufs[1] || new Uint8Array(0);
     ctx.resCell.textContent = 'analyzing…';
     if (b2.length) await ensureWhitelists(b1, b2, n);
+    await kmerPanelsReady;   // ensure sc/sn + 3'/5' panels are injected
     await new Promise(r => setTimeout(r, 0));
     const t0 = performance.now();
     const r = JSON.parse(check(b1, b2, n));
@@ -1112,6 +1131,8 @@ async function runOne(ctx) {
     if (singleEnd) {
       const lib = r.bulk_vs_sc && r.bulk_vs_sc.verdict ? r.bulk_vs_sc.verdict : 'single read';
       ctx.resCell.innerHTML = `<span style="color:var(--muted)">single-end · ${escapeHtml(lib)}</span>${reads}`;
+    } else if (c.modality === 'atac') {
+      ctx.resCell.innerHTML = `${escapeHtml(c.assay_display || 'ATAC')} ${pill(c.confidence)}${reads}`;
     } else if (c.is_single_cell === false) {
       ctx.resCell.innerHTML =
         `<span style="color:var(--warn);font-weight:650">Not single-cell</span> ` +
@@ -1159,6 +1180,46 @@ async function runOne(ctx) {
   }
 }
 
+// Fill a run's "sample / title" cell: GSM · SRX · SRS ids on one line, experiment title
+// on the next. Uses fields already on the run object; only fetches /experiment/{SRX} to
+// backfill a missing sample accession or title (one request, cached per experiment).
+const expInfoCache = new Map();
+async function experimentInfo(srx) {
+  if (!srx) return null;
+  if (!expInfoCache.has(srx)) expInfoCache.set(srx, apiJson(`/experiment/${srx}`).catch(() => null));
+  return expInfoCache.get(srx);
+}
+// The first linked sample accession of an experiment record (samples[] holds strings or
+// {accession}). Shared by fillSampleCell and autoSelectSpecies.
+function firstSampleAcc(exp) {
+  const s = (exp && exp.samples || [])[0];
+  return typeof s === 'string' ? s : (s && s.accession) || null;
+}
+function gsmFrom(run) {
+  const m = `${run.sample_alias || ''} ${run.sample_title || ''} ${run.title || ''} ${run.experiment_alias || ''}`.match(/GSM\d+/);
+  return m ? m[0] : null;
+}
+async function fillSampleCell(td, run) {
+  const srx = run.experiment_accession || null;
+  let srs = run.sample_accession || null;
+  let title = run.sample_title || run.experiment_title || run.library_name || run.title || '';
+  const gsm = gsmFrom(run);
+  const paint = () => {
+    const ids = [gsm, srx, srs].filter(Boolean).map(escapeHtml).join(' · ') || '–';
+    td.innerHTML = `<span style="color:var(--muted)">${ids}</span>` +
+      (title ? `<br><span>${escapeHtml(title)}</span>` : '');
+  };
+  paint();
+  if (srx && (!srs || !title)) {                 // backfill from the experiment record
+    const exp = await experimentInfo(srx);
+    if (exp) {
+      if (!srs) srs = firstSampleAcc(exp);
+      if (!title) title = exp.title || exp.library_name || '';
+      paint();
+    }
+  }
+}
+
 function renderRunsTable(study, data, runs) {
   const head = document.createElement('div');
   head.className = 'runs-head';
@@ -1175,7 +1236,7 @@ function renderRunsTable(study, data, runs) {
 
   const table = document.createElement('table');
   table.className = 'runs';
-  table.innerHTML = '<thead><tr><th scope="col">run</th><th scope="col">layout</th><th scope="col">FASTQ</th><th scope="col"><span class="sr-only">action</span></th><th scope="col">result</th></tr></thead>';
+  table.innerHTML = '<thead><tr><th scope="col">run</th><th scope="col">sample / title</th><th scope="col">layout</th><th scope="col">FASTQ</th><th scope="col"><span class="sr-only">action</span></th><th scope="col">result</th></tr></thead>';
   const tb = document.createElement('tbody');
   const ctxs = [];
   // Run a row, then enable export once it has a report.
@@ -1184,6 +1245,9 @@ function renderRunsTable(study, data, runs) {
     const reads = pickReads(run.fastq_ftp);
     const tr = document.createElement('tr');
     const tdAcc = document.createElement('td'); tdAcc.className = 'acc'; tdAcc.dataset.label = 'run'; tdAcc.textContent = run.run_accession;
+    const tdSample = document.createElement('td'); tdSample.dataset.label = 'sample / title';
+    tdSample.style.cssText = 'font-size:12px;line-height:1.35';
+    fillSampleCell(tdSample, run);   // ids shown immediately; GSM + title filled in lazily
     const tdLay = document.createElement('td'); tdLay.dataset.label = 'layout'; tdLay.textContent = (run.library_layout || '–').toLowerCase();
     const tdFiles = document.createElement('td');
     tdFiles.dataset.label = 'FASTQ';
@@ -1194,9 +1258,9 @@ function renderRunsTable(study, data, runs) {
     const tdRes = document.createElement('td'); tdRes.className = 'res'; tdRes.dataset.label = 'result';
     if (!reads) { btn.disabled = true; tdRes.textContent = 'no FASTQ'; }
     tdBtn.append(btn);
-    tr.append(tdAcc, tdLay, tdFiles, tdBtn, tdRes);
+    tr.append(tdAcc, tdSample, tdLay, tdFiles, tdBtn, tdRes);
     const detailTr = document.createElement('tr'); detailTr.className = 'detail'; detailTr.hidden = true;
-    const detailTd = document.createElement('td'); detailTd.colSpan = 5;
+    const detailTd = document.createElement('td'); detailTd.colSpan = 6;
     const why = document.createElement('div'); why.className = 'why';
     detailTd.append(why); detailTr.append(detailTd);
     tb.append(tr, detailTr);
@@ -1238,9 +1302,8 @@ async function autoSelectSpecies(run) {
     clearAutoSpecies();
     await panelsReady;
     if (!run || !run.experiment_accession) return;
-    const exp = await apiJson(`/experiment/${run.experiment_accession}`);
-    const samp = (exp.samples || [])[0];
-    const acc = typeof samp === 'string' ? samp : (samp && samp.accession);
+    const exp = await experimentInfo(run.experiment_accession);   // shared cache; dedups fillSampleCell's fetch
+    const acc = firstSampleAcc(exp);
     if (!acc) return;
     const name = (await apiJson(`/sample/${acc}`)).scientific_name || '';
     if (!name) return;
@@ -1300,9 +1363,23 @@ async function fetchRuns() {
 els.btnFetchRuns.addEventListener('click', fetchRuns);
 els.accInput.addEventListener('keydown', e => { if (e.key === 'Enter') fetchRuns(); });
 
+// Inject the sc-vs-sn (nucpanel), 3'/5' (endpanel), and ATAC-vs-RNA (atacpanel) k-mer
+// panels so those verdicts work in the browser. Hosted alongside the species panels;
+// absent -> verdicts stay off.
+// Kicked off in the background (the nucpanel is multi-MB) so it never blocks startup;
+// the check paths await `kmerPanelsReady` before scanning. Reuses fetchAndLoad.
+const KMER_PANELS = [
+  { name: 'nucpanel', urls: ['data/panels/human.nucpanel'] },
+  { name: 'endpanel', urls: ['data/panels/human.endpanel'] },
+  { name: 'atacpanel', urls: ['data/panels/human_ubiq.atacpanel'] },
+];
+let kmerPanelsReady = Promise.resolve();
+const loadKmerPanels = () => fetchAndLoad(KMER_PANELS, load_panel, new Set());
+
 (async () => {
   try {
     await init();
+    kmerPanelsReady = loadKmerPanels();   // background: don't block the analyzer on a multi-MB fetch
     populateSexSpecies();
     populateExamples();
     ready = true;

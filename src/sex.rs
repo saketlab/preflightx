@@ -198,6 +198,11 @@ fn analyze(panel: &SexPanel, species: &str, t: &Tally) -> SexReport {
         t.y_hit_reads >= MALE_MIN && t.xist_hit_reads >= 25 && (0.5..=2.0).contains(&yx_ratio);
 
     let mut notes = Vec::new();
+    if !panel.has_y() {
+        notes.push(format!(
+            "the '{species}' panel has no Y-chromosome markers (Y not assembled/annotated); males are not callable — only female via XIST"
+        ));
+    }
     if panel.status != "validated" {
         notes.push(format!(
             "panel for '{species}' is {}; interpret with care (see experiments/sex_panel)",
@@ -638,5 +643,35 @@ mod tests {
         assert_eq!(r.panel_status, "unsupported");
         assert_eq!(r.verdict, "unknown");
         assert!(!r.notes.is_empty());
+    }
+
+    const HUMAN_FEMALE_R2: &str =
+        "https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR311/028/SRR31131528/SRR31131528_2.fastq.gz";
+
+    #[test]
+    #[ignore = "network: streams R2 from ENA"]
+    fn real_female_srp541456_reads_female() {
+        let reads = crate::fastq::sample(std::path::Path::new(HUMAN_FEMALE_R2), 50_000)
+            .expect("stream R2 from ENA")
+            .0;
+        let r = report_for_reads(for_species("human"), "human", &reads);
+        assert_eq!(r.verdict, "female", "report={r:?}");
+    }
+
+    #[test]
+    #[ignore = "network: streams from ENA"]
+    fn real_macaque_male_reads_male() {
+        let cat = crate::speciespanel::Catalogue::load().unwrap();
+        let base = "https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR215/032/SRR21519032/SRR21519032";
+        let (r1, r2) = (format!("{base}_1.fastq.gz"), format!("{base}_2.fastq.gz"));
+        let r = detect_sex_auto_cat(
+            std::path::Path::new(&r1),
+            Some(std::path::Path::new(&r2)),
+            &cat,
+            "Macaca_fascicularis",
+            40_000,
+        )
+        .unwrap();
+        assert_eq!(r.verdict, "male", "report={r:?}");
     }
 }

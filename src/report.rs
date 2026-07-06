@@ -4,6 +4,8 @@ use serde::Serialize;
 use crate::assaydetect::DetectReport;
 use crate::chemistry::ChemReport;
 use crate::composition::CompositionReport;
+use crate::endpanel::EndReport;
+use crate::nucpanel::NucReport;
 use crate::sex::SexReport;
 use crate::size::{BulkReport, SizeReport};
 use crate::species::SpeciesReport;
@@ -25,6 +27,13 @@ pub struct FullReport {
     /// `None` when sex inference was not requested; serializes to no `sex` key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sex: Option<SexReport>,
+    /// Single-cell vs single-nucleus (intron/exon + mito k-mer content). `None` when the
+    /// nucleus panel isn't available (e.g. wasm before injection / no cache).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nucleus: Option<NucReport>,
+    /// 3'/5' transcript-end bias. `None` when the end panel isn't available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<EndReport>,
 }
 
 /// Trimmed report for the `detect-all` subcommand: chemistry + species + sex only.
@@ -60,6 +69,72 @@ impl DetectAllReport {
         self.sex.print();
         println!();
     }
+
+    /// One line per check: the call and its confidence, no evidence ledger or notes.
+    /// The default `detect-all` view; `--detailed` switches to [`print`].
+    pub fn print_summary(&self) {
+        let conf = |c: &str| match c {
+            "high" => c.green(),
+            "medium" => c.yellow(),
+            _ => c.red(),
+        };
+        println!("{}", "preflightx detect-all".bold().bright_blue());
+        if let Some(c) = &self.chemistry {
+            let label = if c.modality == "atac" {
+                "ATAC (chromatin accessibility)"
+            } else {
+                &c.assay_display
+            };
+            println!("  chemistry: {} ({})", label, conf(&c.confidence));
+        }
+        if let Some(s) = &self.species {
+            let mislabel = if s.mislabel { "  MISLABEL".red().to_string() } else { String::new() };
+            println!("  species:   {} ({}){}", s.called, conf(&s.confidence), mislabel);
+        }
+        println!("  sex:       {} ({})", self.sex.verdict, conf(&self.sex.confidence));
+    }
+
+    /// The concise JSON counterpart of [`print_summary`]: the call + confidence per check.
+    /// `--detailed` serializes the full report instead.
+    pub fn summary_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        json!({
+            "r1": self.r1,
+            "r2": self.r2,
+            "chemistry": self.chemistry.as_ref().map(|c| json!({
+                "assay_id": c.assay_id,
+                "assay_display": c.assay_display,
+                "confidence": c.confidence,
+                "modality": c.modality,
+                "is_single_cell": c.is_single_cell,
+            })),
+            "species": self.species.as_ref().map(|s| json!({
+                "called": s.called,
+                "confidence": s.confidence,
+                "mislabel": s.mislabel,
+            })),
+            "sex": json!({ "verdict": self.sex.verdict, "confidence": self.sex.confidence }),
+        })
+    }
+}
+
+/// Nucleus (sc-vs-sn) and end (3'/5') verdicts, each `None` when its panel isn't loaded.
+/// Shared by the native `check` and the wasm `run_check` so both surface the panels
+/// identically. Samples cDNA only when at least one panel is present, so the common
+/// no-panel path (no cached panels / wasm before injection) pays no extra FASTQ pass.
+pub fn panel_verdicts(
+    r1: &std::path::Path,
+    r2: Option<&std::path::Path>,
+    n: usize,
+    species: Option<&str>,
+) -> (Option<NucReport>, Option<EndReport>) {
+    if !(crate::nucpanel::have_panels() || crate::endpanel::have_panels()) {
+        return (None, None);
+    }
+    let reads = crate::sex::sample_cdna(r1, r2, n).unwrap_or_default();
+    let nucleus = crate::nucpanel::have_panels().then(|| crate::nucpanel::classify(&reads));
+    let end = crate::endpanel::have_panels().then(|| crate::endpanel::classify(&reads, species));
+    (nucleus, end)
 }
 
 impl FullReport {
@@ -70,8 +145,9 @@ impl FullReport {
         r2: &std::path::Path,
         n: usize,
         cache: Option<&std::path::Path>,
+        species: Option<&str>,
     ) -> anyhow::Result<(ChemReport, Option<DetectReport>)> {
-        let chem = crate::chemistry::detect(r1, r2, n, cache)?;
+        let chem = crate::chemistry::detect(r1, r2, n, cache, species)?;
         let assay = if chem.is_single_cell {
             None
         } else {
@@ -113,6 +189,10 @@ impl FullReport {
         }
         if let Some(sex) = &self.sex {
             sex.print();
+            println!();
+        }
+        if let Some(nucleus) = &self.nucleus {
+            nucleus.print();
             println!();
         }
     }
@@ -162,6 +242,8 @@ mod tests {
                 notes: vec![],
             },
             sex,
+            nucleus: None,
+            end: None,
         }
     }
 

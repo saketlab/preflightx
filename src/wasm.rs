@@ -72,6 +72,15 @@ pub fn load_whitelist(name: &str, bytes: Vec<u8>) {
     fastq::vfs::put(&format!("{WL_DIR}/{name}"), bytes);
 }
 
+/// Inject a k-mer panel (`.endpanel` or `.nucpanel` text) so the sc-vs-sn and 3'/5'
+/// verdicts work in the browser (there is no panel cache dir on wasm). `kind` is the
+/// extension: "endpanel" or "nucpanel". Call once per panel at page load, before any
+/// [`check`]. Bytes may be plain text.
+#[wasm_bindgen]
+pub fn load_panel(kind: &str, bytes: Vec<u8>) {
+    crate::kmerpanel::store_panel(kind, String::from_utf8_lossy(&bytes).into_owned());
+}
+
 /// Onlists `detect_assay` can score, as JSON `[{cache_name, url}]`. The front-end
 /// fetches each `url` and stashes it via [`load_whitelist`] under `cache_name`.
 #[wasm_bindgen]
@@ -115,6 +124,8 @@ fn run_check_single(n: usize) -> Result<String, JsValue> {
     let bulk = size::bulk_or_sc(r1, n).map_err(err_to_js)?;
     let sz = size::size_sanity(r1, None, n).map_err(err_to_js)?;
     let comp = composition::composition(r1, n).map_err(err_to_js)?;
+    // Single-end: the one read is cDNA, so the panels can still classify.
+    let (nucleus, end) = report::panel_verdicts(r1, None, n, None);
     let full = report::FullReport {
         r1: R1.to_string(),
         r2: None,
@@ -125,6 +136,8 @@ fn run_check_single(n: usize) -> Result<String, JsValue> {
         composition: comp,
         species: None,
         sex: None,
+        nucleus,
+        end,
     };
     to_js(&full)
 }
@@ -133,11 +146,14 @@ fn run_check(n: usize) -> Result<String, JsValue> {
     let r1 = Path::new(R1);
     let r2 = Path::new(R2);
     let (chem, assay_detection) =
-        report::FullReport::chem_with_fallback(r1, r2, n, wl_cache()).map_err(err_to_js)?;
+        report::FullReport::chem_with_fallback(r1, r2, n, wl_cache(), None).map_err(err_to_js)?;
     let bulk = size::bulk_or_sc(r1, n).map_err(err_to_js)?;
     let sz = size::size_sanity(r1, Some(r2), n).map_err(err_to_js)?;
     let cdna = fastq::longer_read(r1, r2, 256).map_err(err_to_js)?;
     let comp = composition::composition(cdna, n).map_err(err_to_js)?;
+    // sc-vs-sn + 3'/5' from the injected nucleus/end panels (each None until the
+    // front-end has called `load_panel`; samples cDNA only if a panel is loaded).
+    let (nucleus, end) = report::panel_verdicts(r1, Some(r2), n, None);
     let full = report::FullReport {
         r1: R1.to_string(),
         r2: Some(R2.to_string()),
@@ -148,6 +164,8 @@ fn run_check(n: usize) -> Result<String, JsValue> {
         composition: comp,
         species: None,
         sex: None,
+        nucleus,
+        end,
     };
     to_js(&full)
 }
@@ -165,7 +183,7 @@ pub fn detect_assay(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, 
 #[wasm_bindgen]
 pub fn chem(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, JsValue> {
     let result = with_pair(r1, r2, || {
-        chemistry::detect(Path::new(R1), Path::new(R2), n_reads, wl_cache()).map_err(err_to_js)
+        chemistry::detect(Path::new(R1), Path::new(R2), n_reads, wl_cache(), None).map_err(err_to_js)
     });
     to_js(&result?)
 }

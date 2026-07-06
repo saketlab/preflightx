@@ -1,24 +1,26 @@
 //! preflightx — pre-flight sanity checks for single-cell RNA-seq FASTQ pairs.
 //!
-//! The crate is consumed two ways:
-//!   * the native `preflightx` binary (`main.rs` → [`cli::run`]), and
-//!   * a WebAssembly library ([`wasm`]) exposing the same checks to the browser.
-//!
-//! Every analysis module is platform-agnostic and funnels its I/O through
-//! [`fastq`], which on wasm reads from an in-memory virtual file map instead of
-//! the filesystem — so the analysis code is shared verbatim across both targets.
+//! Consumed two ways: the native `preflightx` binary (`main.rs` → [`cli::run`])
+//! and a WebAssembly library ([`wasm`]). Analysis modules are platform-agnostic
+//! and funnel I/O through [`fastq`], which on wasm reads from an in-memory file
+//! map instead of the filesystem, so analysis code is shared across both targets.
 
 pub mod assay;
 pub mod assaydetect;
+pub mod atacpanel;
 pub mod chemistry;
 pub mod composition;
+pub mod endpanel;
 pub mod fastq;
+pub mod kmerpanel;
 pub mod libstruct;
+pub mod nucpanel;
 pub mod report;
 pub mod reporthtml;
 pub mod sex;
 pub mod sexpanel;
 pub mod size;
+pub mod snpanel;
 pub mod species;
 pub mod stats;
 

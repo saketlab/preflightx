@@ -92,7 +92,14 @@ fn bulk_wgs_reads_are_not_single_cell() {
         !a.is_single_cell,
         "100bp genomic reads should not look single-cell"
     );
-    let report = build_report(a, false, 200, false);
+    let report = build_report(
+        a,
+        false,
+        200,
+        false,
+        crate::endpanel::classify(&[], None),
+        crate::atacpanel::classify(&[], None),
+    );
     assert_eq!(report.assay_id, "none");
     assert_eq!(report.assay_display, "Not single-cell");
     assert_eq!(report.confidence, "low");
@@ -116,9 +123,6 @@ fn bulk_wgs_reads_are_not_single_cell() {
 
 #[test]
 fn ambiguous_3p_5p_polarity_is_reported_as_both() {
-    // 26 bp R1 (CB16+UMI10) whose barcodes match the 737K onlist, no TSO. 3'v2 and
-    // 5'v1 share this geometry + onlist, so the polarity must be reported as
-    // unresolved (both names), never a confident single pick.
     let n = 200;
     let mut r1 = Vec::new();
     let mut cbs = HashSet::new();
@@ -134,7 +138,14 @@ fn ambiguous_3p_5p_polarity_is_reported_as_both() {
     wl_sets.insert("737K-august-2016.txt.gz", cbs);
 
     let a = analyze(&r1, &r2, &wl_sets, None);
-    let report = build_report(a, false, n, false);
+    let report = build_report(
+        a,
+        false,
+        n,
+        false,
+        crate::endpanel::classify(&[], None),
+        crate::atacpanel::classify(&[], None),
+    );
     assert!(
         report.assay_display.contains(" or "),
         "polarity should be reported as both, got {}",
@@ -180,8 +191,79 @@ fn swapped_inputs_report_barcode_read_as_r2() {
     let long_read: Vec<Vec<u8>> = cdna_r2;
     let short_read: Vec<Vec<u8>> = barcode_r1;
     let a = analyze(&short_read, &long_read, &HashMap::new(), Some(180));
-    let report = build_report(a, true, 200, false);
+    let report = build_report(
+        a,
+        true,
+        200,
+        false,
+        crate::endpanel::classify(&[], None),
+        crate::atacpanel::classify(&[], None),
+    );
     assert_eq!(report.cb_read, "R2");
+}
+
+/// 16CB+10UMI = 26 bp R1, no TSO: geometry alone can't tell 3'v2 from 5'v1.
+fn ambiguous_26bp_reads(n: usize) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    let mut r1 = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut read = distinct_cb(i);
+        read.extend_from_slice(&[b'A'; 10]); // 10 bp UMI -> 26 bp
+        r1.push(read);
+    }
+    let r2: Vec<Vec<u8>> = (0..n).map(|_| vec![b'C'; 90]).collect();
+    (r1, r2)
+}
+
+fn end_report(end: &str, n3: usize, n5: usize) -> crate::endpanel::EndReport {
+    crate::endpanel::EndReport {
+        end: end.into(),
+        confidence: "medium".into(),
+        n5,
+        n3,
+        reads_scanned: n3 + n5,
+        ratio: n3 as f64 / (n3 + n5) as f64,
+        notes: vec![],
+    }
+}
+
+#[test]
+fn decisive_five_prime_end_corrects_registry_default() {
+    let (r1, r2) = ambiguous_26bp_reads(500);
+    let a = analyze(&r1, &r2, &HashMap::new(), Some(0));
+    assert!(a.is_single_cell);
+    let report = build_report(
+        a,
+        false,
+        500,
+        false,
+        end_report("5'", 100, 300),
+        crate::atacpanel::classify(&[], None),
+    );
+    assert_eq!(
+        report.assay_id, "10x_5prime_v1",
+        "display={}",
+        report.assay_display
+    );
+    assert_eq!(report.end, "5'");
+    assert!(report.notes.iter().any(|n| n.contains("corrected")));
+}
+
+#[test]
+fn decisive_three_prime_end_keeps_three_prime() {
+    let (r1, r2) = ambiguous_26bp_reads(500);
+    let a = analyze(&r1, &r2, &HashMap::new(), Some(0));
+    let report = build_report(
+        a,
+        false,
+        500,
+        false,
+        end_report("3'", 300, 100),
+        crate::atacpanel::classify(&[], None),
+    );
+    assert_eq!(report.assay_id, "10x_3prime_v2");
+    assert_eq!(report.end, "3'");
+    assert_eq!(report.confidence, "medium");
+    assert!(report.notes.iter().any(|n| n.contains("confirms")));
 }
 
 #[test]
@@ -198,12 +280,20 @@ fn empty_whitelist_cache_keeps_sprt_fast_path() {
     ));
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let report = detect(&r1, &r2, 8_000, Some(&cache_dir)).unwrap();
+    let report = detect(&r1, &r2, 8_000, Some(&cache_dir), None).unwrap();
 
     std::fs::remove_file(&r1).ok();
     std::fs::remove_file(&r2).ok();
     std::fs::remove_dir_all(&cache_dir).ok();
 
+    // A cached end/atac panel forces a full sample, so only assert early-stop without one.
+    if crate::endpanel::have_panels() || crate::atacpanel::have_panels() {
+        assert!(
+            !report.early_stop,
+            "a cached k-mer panel forces a full sample, not SPRT early-stop"
+        );
+        return;
+    }
     assert!(
         report.early_stop,
         "expected SPRT early stop with no whitelist data"

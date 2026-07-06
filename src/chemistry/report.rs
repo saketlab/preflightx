@@ -1,22 +1,20 @@
-//! Chemistry-detection report assembly: build the `ChemReport` from an `Analysis`,
-//! render the human-readable interpretation, and `print()`. Split out to keep
-//! `chemistry.rs` focused on sampling + scoring.
+//! Chemistry-detection report assembly: build the `ChemReport` from an `Analysis`
+//! and render the human-readable interpretation via `print()`.
 
 use super::*;
 use crate::assay::{AssaySpec, TSO_PRESENT};
 use colored::{ColoredString, Colorize};
 use std::collections::HashMap;
 
-/// Turn a scored `Analysis` into the serializable report: winner geometry, tool
-/// hints, whitelist/anchor tables, the evidence ledger, and human-facing notes.
-/// `n_requested` is the read budget asked for; `early_stop` is true when SPRT
-/// decided before reaching it (so a short sample is explained, not mistaken for a
-/// truncated input).
+/// Turn a scored `Analysis` into the serializable report. `n_requested` is the
+/// read budget asked for; `early_stop` is true when SPRT decided before reaching it.
 pub(crate) fn build_report(
     a: Analysis,
     swapped: bool,
     n_requested: usize,
     early_stop: bool,
+    end: crate::endpanel::EndReport,
+    atac: crate::atacpanel::AtacSignal,
 ) -> ChemReport {
     let Analysis {
         dominant,
@@ -33,29 +31,39 @@ pub(crate) fn build_report(
         is_single_cell,
     } = a;
 
-    // A non-single-cell library has no real chemistry to report, and its scored
-    // winner is a force-fit; never present it as a confident call.
+    // A non-single-cell winner is a force-fit; never present it as confident.
     let confidence = if is_single_cell { confidence } else { "low" };
     let has_wl = !wl_scores.is_empty();
     let cb_sizes: HashMap<(usize, usize), usize> =
         cb_sets.iter().map(|(k, v)| (*k, v.len())).collect();
-    let winner = scored.first().map(|(s, _)| *s);
-    let runner = scored.get(1).map(|(s, _)| *s);
 
-    // 3'v2 and 5'v1 share both geometry and onlist; once the TSO no longer penalizes
-    // absence (one-sided LLR), the top two can tie and differ only in 3'/5' polarity.
-    // That polarity isn't recoverable from the reads, so report both rather than guess.
+    // When the end panel is decisive and contradicts the geometry-only winner's
+    // polarity, correct to the best same-family candidate (fixes false-5' on 3'v2).
+    let (winner, runner, end_corrected) = apply_end_polarity(&scored, &end, is_single_cell);
+
+    // 3'v2 and 5'v1 share geometry and onlist; with the TSO one-sided LLR the top
+    // two can tie on everything but polarity, which geometry can't recover — so
+    // report both, unless the transcript-end panel resolved it.
     let gap = scored.first().map(|(_, s)| *s).unwrap_or(0.0)
         - scored.get(1).map(|(_, s)| *s).unwrap_or(0.0);
-    let polarity_unresolved = match (winner, runner) {
-        (Some(w), Some(r)) => {
-            is_single_cell
-                && gap.abs() < 1.0
-                && same_geometry(w, r)
-                && w.id.contains("3prime") != r.id.contains("3prime")
-        }
-        _ => false,
-    };
+    let polarity_unresolved = !end.is_decisive()
+        && match (winner, runner) {
+            (Some(w), Some(r)) => {
+                is_single_cell
+                    && gap.abs() < 1.0
+                    && same_geometry(w, r)
+                    && w.id.contains("3prime") != r.id.contains("3prime")
+            }
+            _ => false,
+        };
+    // A decisive end panel is independent evidence: promote a low/ambiguous call to
+    // medium (capped there without whitelist version confirmation).
+    let confidence =
+        if is_single_cell && end.is_decisive() && (end_corrected || confidence == "low") {
+            "medium"
+        } else {
+            confidence
+        };
     // Can't claim "high" for a specific polarity when the polarity is unresolved.
     let confidence = if polarity_unresolved && confidence == "high" {
         "medium"
@@ -63,7 +71,16 @@ pub(crate) fn build_report(
         confidence
     };
 
+    // Promoter-enriched reads are a chromatin-accessibility library: ATAC overrides the RNA
+    // chemistry call below (assay_id "atac", is_single_cell false).
+    let is_atac = atac.is_atac();
     let mut notes: Vec<String> = Vec::new();
+    if is_atac {
+        notes.push(format!(
+            "Reads are promoter-enriched (promoter/(promoter+exon)={:.2}, n_prom={}, n_exon={}): this looks like an ATAC library, not RNA, so 10x/Drop-seq chemistry does not apply. Run `preflightx detect-assay` for the ATAC assay.",
+            atac.promoter_frac, atac.n_promoter, atac.n_exon,
+        ));
+    }
     if !is_single_cell {
         notes.push(format!(
             "No 10x/Drop-seq signal detected: R1 is {dominant}bp (10x barcode reads are ~24-30bp), \
@@ -89,6 +106,20 @@ pub(crate) fn build_report(
             );
         }
     }
+    if end_corrected {
+        if let (Some(w), Some(r)) = (winner, runner) {
+            notes.insert(0, format!(
+                "3'/5' corrected by the transcript-end panel: reads land on the {} end of housekeeping transcripts (r={:.2}, n3={}, n5={}), so this is {}, not {} — R1 geometry alone can't separate them.",
+                end.end, end.ratio, end.n3, end.n5, w.display_name, r.display_name,
+            ));
+        }
+    } else if is_single_cell && end.is_decisive() {
+        notes.push(format!(
+            "Transcript-end panel confirms {} (r={:.2}, n3={}, n5={}).",
+            end.end, end.ratio, end.n3, end.n5,
+        ));
+    }
+    notes.extend(end.notes.iter().cloned());
     if swapped {
         notes.push("Input files appeared swapped (R1 was long, R2 was short); auto-oriented to treat the shorter file as R1 (barcodes).".into());
     }
@@ -101,12 +132,8 @@ pub(crate) fn build_report(
             "Input ended after {n_reads} reads (fewer than the {n_requested} requested) — a short file or a sliced fetch."
         ));
     }
-    // The assay-specific notes below only make sense for a real single-cell call;
-    // skip them entirely when the reads are not single-cell.
-    if is_single_cell {
-        // Chemistries like Drop-seq use random (non-whitelisted) barcodes, so there is no
-        // list to confirm them against and `fetch-whitelists` cannot help — say so instead
-        // of suggesting a download that won't change the verdict.
+    if is_single_cell && !is_atac {
+        // Random-barcode chemistries (Drop-seq) have no whitelist to confirm against.
         if winner.map(|w| w.whitelist.is_none()).unwrap_or(false) {
             notes.push(format!(
                 "{} uses random (non-whitelisted) cell barcodes; no whitelist exists to confirm them, so confidence is capped at MEDIUM (geometry-only).",
@@ -138,7 +165,10 @@ pub(crate) fn build_report(
         .map(|w| w.display_name)
         .unwrap_or("unknown")
         .to_string();
-    if !is_single_cell {
+    if is_atac {
+        assay_id = "atac".to_string();
+        assay_display = "ATAC (chromatin accessibility)".to_string();
+    } else if !is_single_cell {
         assay_id = "none".to_string();
         assay_display = "Not single-cell".to_string();
     } else if polarity_unresolved {
@@ -152,19 +182,24 @@ pub(crate) fn build_report(
     let umi_len = winner.map(|w| w.r1_umi_len).unwrap_or(0);
     let whitelist_file =
         winner.and_then(|w| w.whitelist.as_ref().map(|wl| wl.filename.to_string()));
-    let tool_hints = winner
-        .map(|w| {
-            let mut hints = vec![ToolHint {
-                tool: "starsolo".into(),
-                hint: w.starsolo_hint(),
-            }];
-            hints.extend(w.tool_hints.iter().map(|(t, h)| ToolHint {
-                tool: t.to_string(),
-                hint: h.to_string(),
-            }));
-            hints
-        })
-        .unwrap_or_default();
+    // ATAC has no RNA aligner recipe, so suppress the STARsolo/tool hints.
+    let tool_hints = if is_atac {
+        Vec::new()
+    } else {
+        winner
+            .map(|w| {
+                let mut hints = vec![ToolHint {
+                    tool: "starsolo".into(),
+                    hint: w.starsolo_hint(),
+                }];
+                hints.extend(w.tool_hints.iter().map(|(t, h)| ToolHint {
+                    tool: t.to_string(),
+                    hint: h.to_string(),
+                }));
+                hints
+            })
+            .unwrap_or_default()
+    };
 
     let n_cb = winner
         .and_then(|w| cb_sets.get(&(w.r1_cb_offset, w.r1_cb_len)))
@@ -193,7 +228,17 @@ pub(crate) fn build_report(
         })
         .collect();
 
-    let mut interpretation = if is_single_cell {
+    let mut interpretation = if is_atac {
+        vec![Evidence {
+            signal: "ATAC modality".into(),
+            observation: format!(
+                "promoter/(promoter+exon)={:.2} (n_prom={}, n_exon={})",
+                atac.promoter_frac, atac.n_promoter, atac.n_exon,
+            ),
+            llr_contribution: None,
+            conclusion: "Reads hit upstream promoters that RNA cannot reach, so this is chromatin accessibility (ATAC), not an RNA chemistry. Run `preflightx detect-assay` for the ATAC assay.".into(),
+        }]
+    } else if is_single_cell {
         build_interpretation(
             winner,
             &scored,
@@ -209,7 +254,7 @@ pub(crate) fn build_report(
     } else {
         build_not_single_cell_interpretation(dominant, tso_pct, max_wl_pct, n_reads, winner)
     };
-    if polarity_unresolved {
+    if polarity_unresolved && !is_atac {
         if let (Some(w), Some(r)) = (winner, runner) {
             interpretation.push(Evidence {
                 signal: "3' vs 5' polarity".into(),
@@ -222,6 +267,28 @@ pub(crate) fn build_report(
                     "The reads carry no signal that separates 3' from 5' here, so both are reported. The R2 TSO would normally break this tie when present.".into(),
             });
         }
+    }
+    // Transcript-end evidence: the independent 3'/5' signal R1 length can't provide.
+    if is_single_cell && !is_atac && (end.n3 + end.n5) > 0 {
+        interpretation.push(Evidence {
+            signal: "Transcript-end bias (R2)".into(),
+            observation: format!(
+                "{} 3'-end vs {} 5'-end housekeeping-transcript hits (r={:.2})",
+                end.n3, end.n5, end.ratio,
+            ),
+            llr_contribution: None,
+            conclusion: match end.end.as_str() {
+                "3'" => "R2 piles at transcript 3' ends (polyA-primed) → 3' chemistry.".into(),
+                "5'" => {
+                    "R2 piles at transcript 5' ends (cap/template-switch) → 5' chemistry.".into()
+                }
+                "full-length" => {
+                    "R2 spreads evenly across ends → full-length / plate-based, not 3'/5'-primed."
+                        .into()
+                }
+                _ => "end bias is in the gray zone — not decisive for 3' vs 5'.".into(),
+            },
+        });
     }
 
     ChemReport {
@@ -236,21 +303,61 @@ pub(crate) fn build_report(
         umi_offset,
         umi_len,
         n_cb_candidates: n_cb,
-        is_single_cell,
+        is_single_cell: is_single_cell && !is_atac,
         early_stop,
         whitelist: whitelist_file,
         whitelist_scores: wl_scores_out,
         anchor_scores: anchor_scores_out,
         tool_hints,
         confidence: confidence.to_string(),
+        modality: atac.modality.to_string(),
+        atac_promoter_frac: fastq::round2(atac.promoter_frac),
+        end: end.end.clone(),
+        end_confidence: end.confidence.clone(),
+        n5: end.n5,
+        n3: end.n3,
+        end_ratio: end.ratio,
         interpretation,
         notes,
     }
 }
 
-/// Build the evidence ledger explaining *why* `winner` was chosen, signal by signal.
-/// Mirrors the decision flow in `detect()`: length gives candidates, TSO gives
-/// polarity, whitelist gives version, then the final scored verdict.
+/// Apply the transcript-end verdict to the geometry-ranked candidates, returning the
+/// (possibly corrected) winner + runner and whether a correction was made. Only acts
+/// on a single-cell library with a decisive end call that contradicts the geometry
+/// winner's polarity, promoting the top same-polarity 10x candidate.
+fn apply_end_polarity<'a>(
+    scored: &[(&'a AssaySpec, f64)],
+    end: &crate::endpanel::EndReport,
+    is_single_cell: bool,
+) -> (Option<&'a AssaySpec>, Option<&'a AssaySpec>, bool) {
+    let winner = scored.first().map(|(s, _)| *s);
+    let runner = scored.get(1).map(|(s, _)| *s);
+    if !is_single_cell || !end.is_decisive() {
+        return (winner, runner, false);
+    }
+    let want_3p = end.end == "3'";
+    let w = match winner {
+        Some(w) => w,
+        None => return (winner, runner, false),
+    };
+    if w.id.contains("3prime") == want_3p {
+        return (winner, runner, false); // geometry winner already agrees
+    }
+    // Best-scored 10x candidate of the wanted polarity, restricted to the winner's own CB+UMI
+    let corrected = scored.iter().map(|(s, _)| *s).find(|s| {
+        (s.id.contains("3prime") || s.id.contains("5prime"))
+            && s.id.contains("3prime") == want_3p
+            && same_geometry(w, s)
+    });
+    match corrected {
+        Some(c) if c.id != w.id => (Some(c), Some(w), true),
+        _ => (winner, runner, false),
+    }
+}
+
+/// Build the evidence ledger explaining why `winner` was chosen, signal by signal
+/// (length -> candidates, TSO -> polarity, whitelist -> version, then the verdict).
 #[allow(clippy::too_many_arguments)]
 fn build_interpretation(
     winner: Option<&AssaySpec>,
@@ -293,8 +400,6 @@ fn build_interpretation(
             .iter()
             .filter_map(|a| anchor_pcts.get(a.seq).copied())
             .fold(0.0_f64, f64::max);
-        // Wording follows the observed level, not the winner's model: only call it a
-        // TSO signal when it actually contributed evidence (one-sided, so absence = 0).
         let conclusion = if tso_ll > 1.0 {
             format!(
                 "TSO present in {pct:.1}% of R2 (background ~{:.0}%): the template-switch oligo is detected, which marks 3' chemistry.",
@@ -363,10 +468,17 @@ fn build_interpretation(
         }
     }
 
-    let best = scored.first().map(|(_, s)| *s).unwrap_or(0.0);
-    let second = scored.get(1).map(|(_, s)| *s).unwrap_or(0.0);
+    // Score/gap for the actual winner (the end panel may have corrected it off the
+    // geometry-ranked top), and the runner is the best *other* candidate.
+    let best = scored
+        .iter()
+        .find(|(s, _)| s.id == winner.id)
+        .map(|(_, s)| *s)
+        .unwrap_or(0.0);
+    let runner_entry = scored.iter().find(|(s, _)| s.id != winner.id);
+    let second = runner_entry.map(|(_, s)| *s).unwrap_or(0.0);
     let gap = best - second;
-    let runner = scored.get(1).map(|(s, _)| *s);
+    let runner = runner_entry.map(|(s, _)| *s);
     let tie = runner.is_some_and(|r| gap.abs() < 1.0 && same_geometry(winner, r));
     let conclusion = if tie {
         format!(
@@ -399,9 +511,8 @@ fn build_interpretation(
     ev
 }
 
-/// Evidence ledger for a library with no single-cell signal. Walks the same three
-/// signals the positive path uses, but each step says why it *fails* the test, so
-/// the reader sees exactly how we concluded "not single-cell" rather than a verdict.
+/// Evidence ledger for a library with no single-cell signal: walks the same three
+/// signals as the positive path, but each step says why it fails the test.
 fn build_not_single_cell_interpretation(
     dominant: usize,
     tso_pct: f64,
@@ -484,13 +595,27 @@ impl ChemReport {
             color(&self.assay_display).bold(),
             color(conf)
         );
-        println!(
-            "  Geometry:  CB=R1[{}..{}]  UMI=R1[{}..{}]",
-            self.cb_offset,
-            self.cb_offset + self.cb_len,
-            self.umi_offset,
-            self.umi_offset + self.umi_len,
-        );
+        if self.modality == "atac" {
+            println!(
+                "  Modality: ATAC (promoter/(promoter+exon)={:.2})",
+                self.atac_promoter_frac
+            );
+        }
+        if self.is_single_cell {
+            println!(
+                "  Geometry:  CB=R1[{}..{}]  UMI=R1[{}..{}]",
+                self.cb_offset,
+                self.cb_offset + self.cb_len,
+                self.umi_offset,
+                self.umi_offset + self.umi_len,
+            );
+        }
+        if self.end != "unknown" || self.n3 + self.n5 > 0 {
+            println!(
+                "  Transcript end (3'/5'): {} ({})   n3={} n5={} r={:.2}",
+                self.end, self.end_confidence, self.n3, self.n5, self.end_ratio,
+            );
+        }
         if let Some(wl) = &self.whitelist {
             println!("  Whitelist: {}", wl);
         }

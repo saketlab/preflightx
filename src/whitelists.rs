@@ -30,6 +30,28 @@ pub fn panel_cache_dir() -> Result<PathBuf> {
 const PANELS_PROVENANCE_URL: &str = "https://preflightx.saketlab.org/data/panels.json";
 const PANELS_MIRROR_URL: &str = "https://preflightx.saketlab.org/data/panels";
 
+/// Transcript-end (3'/5'), single-cell/single-nucleus, and ATAC-vs-RNA k-mer panels, served
+/// from the same mirror as the `.spanel` files under the names the browser fetches
+/// (`web/index.html` KMER_PANELS). Listed by name rather than via the provenance JSON.
+const KMER_PANEL_FILES: &[&str] = &[
+    "human.endpanel",
+    "human.nucpanel",
+    "human_ubiq.atacpanel",
+    "mouse.endpanel",
+    "mouse.nucpanel",
+    // Per-species ATAC panels, routed by the detected organism (the `#species` header).
+    "Mus_musculus.atacpanel",
+    "Rattus_norvegicus.atacpanel",
+    "Danio_rerio.atacpanel",
+    "Macaca_mulatta.atacpanel",
+    "Pan_troglodytes.atacpanel",
+    "Callithrix_jacchus.atacpanel",
+    "Felis_catus.atacpanel",
+    "Bos_taurus.atacpanel",
+    "Equus_caballus.atacpanel",
+    "Oryctolagus_cuniculus.atacpanel",
+];
+
 /// Download the `.spanel` panels into [`panel_cache_dir`]. Reads the provenance
 /// JSON (the same file the web UI + deploy script use), then fetches each panel
 /// from the server mirror. Best-effort — a missing host falls back to the
@@ -78,6 +100,21 @@ pub fn fetch_panels() -> Result<()> {
             cached,
         )?;
     }
+    // End (3'/5'), cell/nucleus, and ATAC k-mer panels. The mirror publishes a manifest
+    // (`kmer_panels.json`) so new per-species panels ship without a code change; the
+    // hardcoded list is the offline fallback. >10 KB counts as cached.
+    let kmer_files = fetch_kmer_manifest(&client, &dir)
+        .unwrap_or_else(|| KMER_PANEL_FILES.iter().map(|s| s.to_string()).collect());
+    for name in &kmer_files {
+        let cached = dir.join(name).exists() && fs::metadata(dir.join(name))?.len() > 10_000;
+        any_failed |= !fetch_into(
+            &client,
+            &dir,
+            name,
+            &format!("{PANELS_MIRROR_URL}/{name}"),
+            cached,
+        )?;
+    }
     println!();
     if any_failed {
         println!("{}", "Some panels could not be downloaded.".yellow());
@@ -88,6 +125,22 @@ pub fn fetch_panels() -> Result<()> {
         dir.display()
     );
     Ok(())
+}
+
+/// The mirror's list of k-mer panel filenames (`kmer_panels.json`, a JSON string array),
+/// so per-species panels ship without editing [`KMER_PANEL_FILES`]. `None` on any failure,
+/// where the caller falls back to the hardcoded list.
+fn fetch_kmer_manifest(client: &reqwest::blocking::Client, dir: &Path) -> Option<Vec<String>> {
+    let url = format!("{PANELS_MIRROR_URL}/kmer_panels.json");
+    download_one(client, &url, &dir.join("kmer_panels.json")).ok()?;
+    let text = fs::read_to_string(dir.join("kmer_panels.json")).ok()?;
+    let doc: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let files: Vec<String> = doc
+        .as_array()?
+        .iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+    (!files.is_empty()).then_some(files)
 }
 
 pub fn fetch_all() -> Result<()> {

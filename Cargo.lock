@@ -763,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "preflightx"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -773,6 +773,7 @@ dependencies = [
  "flate2",
  "needletail",
  "reqwest",
+ "rustc-hash",
  "serde",
  "serde_json",
  "serde_norway",

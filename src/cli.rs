@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use crate::sex::SexReport;
 use crate::{
-    assaydetect, chemistry, composition, fastq, report, sex, size, species, speciespanel,
-    whitelists,
+    assaydetect, chemistry, composition, fastq, nucpanel, report, sex, size, snpanel, species,
+    speciespanel, whitelists,
 };
 
 /// Sparse-signal detectors (sex, species) under-call on shallow samples. Run `score(n)`,
@@ -65,6 +65,9 @@ fn species_and_sex(
         })?;
         Ok((None, sx))
     } else {
+        // The intron channel rescues single-nucleus species-ID (loaded once; empty if uncached).
+        let introns = snpanel::IntronCatalogue::load()
+            .unwrap_or_else(|_| snpanel::IntronCatalogue::from_texts(&[]));
         let (sp, sx) = deepen_if_weak(
             sex_reads,
             |(sp, sx): &(species::SpeciesReport, sex::SexReport)| {
@@ -73,6 +76,7 @@ fn species_and_sex(
             |n| {
                 let reads = sex::sample_cdna(r1, r2, n)?;
                 let sp = species::detect_species(&reads, &catalogue, declared);
+                let sp = species::apply_intron_channel(sp, &reads, &introns);
                 let sx =
                     sex::report_for_reads(catalogue.for_species(&sp.called), &sp.called, &reads);
                 Ok((sp, sx))
@@ -80,6 +84,17 @@ fn species_and_sex(
         )?;
         Ok((Some(sp), sx))
     }
+}
+
+/// Species to route the ATAC-vs-RNA panel by: the detected call when confident, else
+/// the declared `--species`.
+fn atac_species_hint<'a>(
+    sp: Option<&'a species::SpeciesReport>,
+    declared: Option<&'a str>,
+) -> Option<&'a str> {
+    sp.filter(|s| !s.is_unknown())
+        .map(|s| s.called.as_str())
+        .or(declared)
 }
 
 #[derive(Parser)]
@@ -107,6 +122,10 @@ struct Cli {
     /// Reads to sample for the sex check (Y/XIST are sparse, so deeper than --n-reads).
     #[arg(long, global = true, default_value_t = 200_000)]
     sex_reads: usize,
+
+    /// `detect-all`: show the full evidence ledger and notes (default: one line per check).
+    #[arg(long, global = true)]
+    detailed: bool,
 }
 
 #[derive(Subcommand)]
@@ -131,6 +150,9 @@ enum Cmd {
     /// Closed-set organism ID from cDNA reads (exact k-mer match vs cached panels).
     /// Flags a mislabel when the call disagrees with `--species`.
     Species { r1: PathBuf, r2: Option<PathBuf> },
+    /// Single-cell vs single-nucleus from cDNA reads (intron + mitochondrial k-mer
+    /// content; alignment-free). Needs the cached nucleus panel (`fetch-panels`).
+    Nucleus { r1: PathBuf, r2: Option<PathBuf> },
     /// Generic seqspec-driven detection: rank any catalogued single-cell assay
     /// against the reads (geometry + linker anchors, no whitelist needed).
     DetectAssay { r1: PathBuf, r2: PathBuf },
@@ -155,27 +177,33 @@ pub fn run() -> Result<()> {
     match cli.cmd {
         Cmd::Check { r1, r2 } => {
             let cache = whitelists::cache_dir()?;
+            // Species first: routes the sex panel and the chemistry ATAC panel to the
+            // called organism; both scan the same cDNA pass.
+            let (species_rep, sx) =
+                species_and_sex(&r1, r2.as_deref(), cli.species.as_deref(), cli.sex_reads)?;
+            let sp_hint = atac_species_hint(species_rep.as_ref(), cli.species.as_deref());
             let (chem, assay_detection) = if let Some(ref r2p) = r2 {
-                let (c, a) =
-                    report::FullReport::chem_with_fallback(&r1, r2p, cli.n_reads, Some(&cache))?;
+                let (c, a) = report::FullReport::chem_with_fallback(
+                    &r1,
+                    r2p,
+                    cli.n_reads,
+                    Some(&cache),
+                    sp_hint,
+                )?;
                 (Some(c), a)
             } else {
                 (None, None)
             };
             let bulk = size::bulk_or_sc(&r1, cli.n_reads)?;
             let sz = size::size_sanity(&r1, r2.as_deref(), cli.n_reads)?;
-            // Composition reads the cDNA (longer read of a pair); sex auto-selects its
-            // own reads (cDNA read for single-cell, both mates for paired-end bulk).
+            // Composition reads the cDNA (longer read of a pair).
             let cdna_read = match r2.as_deref() {
                 Some(r2p) => fastq::longer_read(&r1, r2p, 256)?,
                 None => &r1,
             };
             let comp = composition::composition(cdna_read, cli.n_reads)?;
-            // Species first, then route sex to the *called* species' panel. Both scan the
-            // same sampled cDNA reads (one read pass). With no panels cached we degrade to
-            // the legacy behaviour: no species call, sex against the --species default.
-            let (species_rep, sx) =
-                species_and_sex(&r1, r2.as_deref(), cli.species.as_deref(), cli.sex_reads)?;
+            // sc-vs-sn + 3'/5' (each None if its panel is uncached; samples cDNA only if a panel is loaded).
+            let (nucleus, end) = report::panel_verdicts(&r1, r2.as_deref(), cli.n_reads, sp_hint);
             let r = report::FullReport {
                 r1: r1.display().to_string(),
                 r2: r2.as_ref().map(|p| p.display().to_string()),
@@ -186,6 +214,8 @@ pub fn run() -> Result<()> {
                 composition: comp,
                 species: species_rep,
                 sex: Some(sx),
+                nucleus,
+                end,
             };
             if let Some(path) = &cli.html {
                 std::fs::write(path, r.to_html())?;
@@ -199,15 +229,17 @@ pub fn run() -> Result<()> {
         }
         Cmd::DetectAll { r1, r2 } => {
             let (r1, r2) = split_pair(r1, r2);
+            // Species first, so chemistry's ATAC panel can pick the called organism.
+            let (species, sex) =
+                species_and_sex(&r1, r2.as_deref(), cli.species.as_deref(), cli.sex_reads)?;
+            let sp_hint = atac_species_hint(species.as_ref(), cli.species.as_deref());
             let chemistry = r2
                 .as_deref()
                 .map(|r2p| {
                     let cache = whitelists::cache_dir()?;
-                    chemistry::detect(&r1, r2p, cli.n_reads, Some(&cache))
+                    chemistry::detect(&r1, r2p, cli.n_reads, Some(&cache), sp_hint)
                 })
                 .transpose()?;
-            let (species, sex) =
-                species_and_sex(&r1, r2.as_deref(), cli.species.as_deref(), cli.sex_reads)?;
             let r = report::DetectAllReport {
                 r1: r1.display().to_string(),
                 r2: r2.as_ref().map(|p| p.display().to_string()),
@@ -215,15 +247,16 @@ pub fn run() -> Result<()> {
                 species,
                 sex,
             };
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&r)?);
-            } else {
-                r.print();
+            match (cli.json, cli.detailed) {
+                (true, true) => println!("{}", serde_json::to_string_pretty(&r)?),
+                (true, false) => println!("{}", serde_json::to_string_pretty(&r.summary_json())?),
+                (false, true) => r.print(),
+                (false, false) => r.print_summary(),
             }
         }
         Cmd::Chem { r1, r2 } => {
             let cache = whitelists::cache_dir()?;
-            let c = chemistry::detect(&r1, &r2, cli.n_reads, Some(&cache))?;
+            let c = chemistry::detect(&r1, &r2, cli.n_reads, Some(&cache), cli.species.as_deref())?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&c)?);
             } else {
@@ -255,8 +288,6 @@ pub fn run() -> Result<()> {
             }
         }
         Cmd::Sex { r1, r2 } => {
-            // Auto-selects cDNA reads: the cDNA read for single-cell, both mates for
-            // paired-end bulk, or the sole file for single-end. Prefers a cached panel.
             let sp = cli.species.as_deref().unwrap_or("human");
             let catalogue = speciespanel::Catalogue::load()?;
             let s = deepen_if_weak(cli.sex_reads, SexReport::is_uncertain, |n| {
@@ -270,11 +301,13 @@ pub fn run() -> Result<()> {
         }
         Cmd::Species { r1, r2 } => {
             let catalogue = speciespanel::Catalogue::load()?;
+            let introns = snpanel::IntronCatalogue::load_or_empty();
             let s = deepen_if_weak(cli.sex_reads, species::SpeciesReport::is_unknown, |n| {
                 species::detect_species_auto(
                     &r1,
                     r2.as_deref(),
                     &catalogue,
+                    &introns,
                     cli.species.as_deref(),
                     n,
                 )
@@ -283,6 +316,16 @@ pub fn run() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&s)?);
             } else {
                 s.print();
+            }
+        }
+        Cmd::Nucleus { r1, r2 } => {
+            // Nucleus vs cell is a cDNA-read property; sample cDNA as sex/species do.
+            let reads = sex::sample_cdna(&r1, r2.as_deref(), cli.n_reads)?;
+            let nuc = nucpanel::classify(&reads);
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&nuc)?);
+            } else {
+                nuc.print();
             }
         }
         Cmd::DetectAssay { r1, r2 } => {
@@ -349,17 +392,14 @@ mod tests {
     #[test]
     fn split_pair_modes() {
         let p = |s: &str| PathBuf::from(s);
-        // two args
         assert_eq!(
             split_pair("a.fq".into(), Some("b.fq".into())),
             (p("a.fq"), Some(p("b.fq")))
         );
-        // single comma-separated arg
         assert_eq!(
             split_pair("a.fq,b.fq".into(), None),
             (p("a.fq"), Some(p("b.fq")))
         );
-        // single-end
         assert_eq!(split_pair("a.fq".into(), None), (p("a.fq"), None));
     }
 }

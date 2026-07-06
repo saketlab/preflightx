@@ -979,3 +979,47 @@ fn resolves_combinatorial_neg_strand_layout_splitseq() {
     let linker = layout.iter().find(|s| s.region_type == "linker").unwrap();
     assert!(linker.sequence.is_some());
 }
+
+#[test]
+fn scatac_structural_reads_are_modality_aware() {
+    let assays = embedded_assays();
+    let by = |f: &str| assays.iter().find(|a| a.spec_file == f).unwrap();
+
+    let (_rid, atac) = by("10x_atac.spec.yaml")
+        .structural_read()
+        .expect("10x_atac resolves to its barcode read");
+    let bc: Vec<usize> = atac
+        .iter()
+        .filter(|s| is_barcode_type(&s.region_type))
+        .map(|s| s.len)
+        .collect();
+    assert_eq!(
+        bc,
+        [16],
+        "10x scATAC has one 16 bp cell barcode, got {bc:?}"
+    );
+    assert!(
+        !atac.iter().any(|s| is_umi_type(&s.region_type)),
+        "scATAC has no UMI"
+    );
+
+    let (rid, rna) = by("10x_rna_atac_multi.spec.yaml")
+        .structural_read()
+        .expect("multiome resolves to its RNA read");
+    assert!(
+        rid.starts_with("rna"),
+        "multiome must resolve to the RNA read, got {rid}"
+    );
+    let rbc: Vec<usize> = rna
+        .iter()
+        .filter(|s| is_barcode_type(&s.region_type))
+        .map(|s| s.len)
+        .collect();
+    let umi: Vec<usize> = rna
+        .iter()
+        .filter(|s| is_umi_type(&s.region_type))
+        .map(|s| s.len)
+        .collect();
+    assert_eq!(rbc, [16], "10x RNA cell barcode is 16 bp, got {rbc:?}");
+    assert_eq!(umi, [12], "10x multiome RNA UMI is 12 bp, got {umi:?}");
+}

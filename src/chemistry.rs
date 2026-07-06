@@ -8,20 +8,18 @@ use crate::assay::{AnchorMotif, AssaySpec, ASSAYS, TSO_PRESENT};
 use crate::fastq;
 use crate::stats::{bernoulli_llr, dominant_len};
 
-// log-likelihood model parameters
 // TSO background rate: fraction of R2 reads where the 13-mer appears by chance.
 const P_TSO_BACKGROUND: f64 = 0.01;
-// Whitelist: expected CB match rates when the whitelist is correct vs wrong.
+// Expected CB match rates when the whitelist is correct vs wrong.
 const P_WL_CORRECT: f64 = 0.70;
 const P_WL_NULL: f64 = 0.01;
 
-// Dividing LLR by n_reads makes the threshold sample-size-independent.
+// Thresholds are per-read (LLR / n_reads) so they are sample-size-independent.
 const HIGH_LL_PER_READ: f64 = 0.30; // strong total evidence
 const HIGH_GAP_PER_READ: f64 = 0.10; // top assay uniquely ahead of second
 const MEDIUM_LL_PER_READ: f64 = 0.001; // any positive discrimination
 
-// SPRT early-stopping parameters
-// Used only when no whitelist cache is present (whitelist needs large CB sample).
+// SPRT early-stopping (no-whitelist path only; whitelist needs a large CB sample).
 const SPRT_THRESHOLD: f64 = 200.0; // nats; |TSO LLR| above this decides the family
 const SPRT_MIN_READS: usize = 5_000; // never stop before this many pairs
 const SPRT_BATCH: usize = 2_000; // pairs per streaming batch
@@ -45,9 +43,8 @@ pub struct ToolHint {
     pub hint: String,
 }
 
-/// One reasoning step in the verdict's evidence ledger. Together these form the
-/// `interpretation` chain: each signal, what was observed, how many nats of
-/// log-likelihood it contributed to the winning assay, and what it implies.
+/// One reasoning step in the verdict's evidence ledger: a signal, what was observed,
+/// the nats of log-likelihood it contributed to the winner, and what it implies.
 #[derive(Serialize, Debug)]
 pub struct Evidence {
     pub signal: String,
@@ -82,6 +79,19 @@ pub struct ChemReport {
     pub anchor_scores: Vec<AnchorScore>,
     pub tool_hints: Vec<ToolHint>,
     pub confidence: String,
+    /// ATAC-vs-RNA read-content modality: "atac" | "rna" | "unknown". "atac" overrides the
+    /// RNA chemistry call (assay_id "atac", is_single_cell false).
+    pub modality: String,
+    /// promoter / (promoter + exon) k-mer hits; high -> ATAC. 0.0 when no panel/hits.
+    pub atac_promoter_frac: f64,
+    /// Transcript-end polarity from the 3'/5' k-mer panel, independent of R1 geometry
+    /// (which cannot tell 3'v2 from 5'): "3'" | "5'" | "full-length" | "ambiguous" | "unknown".
+    pub end: String,
+    pub end_confidence: String,
+    /// Reads hitting a 5'-end / 3'-end transcript marker, and r = n3/(n3+n5).
+    pub n5: usize,
+    pub n3: usize,
+    pub end_ratio: f64,
     pub interpretation: Vec<Evidence>,
     pub notes: Vec<String>,
 }
@@ -91,10 +101,9 @@ pub fn detect(
     r2: &Path,
     n: usize,
     whitelist_cache: Option<&Path>,
+    species: Option<&str>,
 ) -> Result<ChemReport> {
-    // 1. Auto-orient (I/O), 2. sample reads (I/O), 3. load whitelists (I/O),
-    // 4. score (pure), 5. assemble the report (pure). Steps 4-5 are unit-tested
-    // directly via `analyze`; the I/O steps are thin and orientation-preserving.
+    // orient + sample + load whitelists (I/O) → analyze (pure) → build_report (pure).
     let (eff_r1, eff_r2, swapped) = orient(r1, r2)?;
     let wl_sets = match whitelist_cache {
         Some(cache) => {
@@ -105,10 +114,16 @@ pub fn detect(
         }
         None => HashMap::new(),
     };
-    let s = sample_reads(eff_r1, eff_r2, n, !wl_sets.is_empty())?;
+    // Full sample (no SPRT early-stop) when a whitelist cache or a k-mer panel is
+    // available; all need depth (CB overlap, 3'/5' + ATAC housekeeping hits).
+    let want_full =
+        !wl_sets.is_empty() || crate::endpanel::have_panels() || crate::atacpanel::have_panels();
+    let s = sample_reads(eff_r1, eff_r2, n, want_full)?;
 
     let analysis = analyze(&s.r1, &s.r2, &wl_sets, s.sprt_tso_hits);
-    Ok(build_report(analysis, swapped, n, s.early_stop))
+    let end = crate::endpanel::classify(&s.r2, species);
+    let atac = crate::atacpanel::classify_pair(&s.r1, &s.r2, species);
+    Ok(build_report(analysis, swapped, n, s.early_stop, end, atac))
 }
 
 /// Distinct whitelist filenames relevant to the pair's observed R1 geometry.
@@ -294,8 +309,7 @@ fn classify_confidence(
 }
 
 /// Score the sampled reads against every candidate assay. Pure: no file or network
-/// access — whitelist barcode sets are passed in via `wl_sets`. This is the seam the
-/// chemistry tests drive directly.
+/// access — whitelist barcode sets are passed in via `wl_sets`.
 fn analyze(
     r1_seqs: &[Vec<u8>],
     r2_seqs: &[Vec<u8>],
@@ -420,17 +434,12 @@ fn log_likelihood_assay(
 }
 
 /// Per-signal log-likelihood ratio for an assay, returned as `(tso_llr, whitelist_llr)`.
-/// The two are summed for ranking; kept separate so the interpretation report can
-/// attribute the verdict to each signal.
+/// Summed for ranking; kept separate so the report can attribute the verdict per signal.
 ///
-/// TSO contribution is **one-sided**: an observed TSO rate above background rewards
-/// the assays that expect it (positive LLR), but a rate at/below background adds 0
-/// rather than penalizing. Real 3' libraries often show ~background TSO-at-R2-start,
-/// so penalizing its absence wrongly rejected 3' and defaulted ambiguous 26 bp
-/// libraries (3'v2 vs 5'v1, same onlist) to 5'. `.max(0.0)` keeps presence as evidence
-/// while making absence non-informative.
-///
-/// Whitelist contribution: LLR of observed match rate under P_WL_CORRECT vs P_WL_NULL.
+/// TSO contribution is **one-sided** (`.max(0.0)`): a rate above background rewards the
+/// assays that expect it, but a rate at/below background adds 0 rather than penalizing.
+/// Real 3' libraries often show ~background TSO-at-R2-start, so penalizing its absence
+/// wrongly defaulted ambiguous 26 bp libraries (3'v2 vs 5'v1, same onlist) to 5'.
 fn llr_components(
     spec: &AssaySpec,
     anchor_pcts: &HashMap<&'static [u8], f64>,
