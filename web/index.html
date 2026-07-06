@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>preflightx: single-cell FASTQ pre-flight, in your browser</title>
-<meta name="description" content="Paste an accession or drop a FASTQ — preflightx reads a single-cell library’s chemistry, assay, species and genetic sex against 50+ catalogued assays, entirely in your browser. Nothing is uploaded." />
+<meta name="description" content="Paste an accession or drop a FASTQ, and preflightx reads a single-cell library's chemistry, assay, species and genetic sex against 50+ catalogued assays, entirely in your browser. Nothing is uploaded." />
 <link rel="canonical" href="https://preflightx.saketlab.org/" />
 <meta name="author" content="Saket Choudhary (saketlab.org)" />
 <meta name="theme-color" content="#f4f1e8" media="(prefers-color-scheme: light)" />
@@ -15,17 +15,17 @@
 <meta property="og:site_name" content="preflightx" />
 <meta property="og:url" content="https://preflightx.saketlab.org/" />
 <meta property="og:title" content="preflightx: single-cell FASTQ pre-flight in your browser" />
-<meta property="og:description" content="Paste an accession or drop a FASTQ — preflightx reads a single-cell library’s chemistry, assay, species and genetic sex against 50+ catalogued assays, entirely in your browser. Nothing is uploaded." />
+<meta property="og:description" content="Paste an accession or drop a FASTQ, and preflightx reads a single-cell library's chemistry, assay, species and genetic sex against 50+ catalogued assays, entirely in your browser. Nothing is uploaded." />
 <meta property="og:image" content="https://preflightx.saketlab.org/og.png" />
 <meta property="og:image:width" content="1200" />
 <meta property="og:image:height" content="630" />
-<meta property="og:image:alt" content="preflightx social card: a single-cell read drawn as cell-barcode, UMI and cDNA segments resolving into the detected verdicts — 10x Chromium 3′ v3, Homo sapiens and genetic sex." />
+<meta property="og:image:alt" content="preflightx social card: a single-cell read drawn as cell-barcode, UMI and cDNA segments resolving into the detected verdicts: 10x Chromium 3' v3, Homo sapiens and genetic sex." />
 
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:site" content="@saketkc" />
 <meta name="twitter:creator" content="@saketkc" />
 <meta name="twitter:title" content="preflightx: single-cell FASTQ pre-flight in your browser" />
-<meta name="twitter:description" content="Paste an accession or drop a FASTQ — preflightx reads a single-cell library’s chemistry, assay, species and genetic sex against 50+ catalogued assays, entirely in your browser. Nothing is uploaded." />
+<meta name="twitter:description" content="Paste an accession or drop a FASTQ, and preflightx reads a single-cell library's chemistry, assay, species and genetic sex against 50+ catalogued assays, entirely in your browser. Nothing is uploaded." />
 <meta name="twitter:image" content="https://preflightx.saketlab.org/og.png" />
 <style>
   :root {
@@ -270,7 +270,6 @@
   .card { border-radius: 12px; }
   .drop, textarea, pre { border-radius: 10px; }
   button, .tab, input[type=number], input[type=text], select, .stat, .why-toggle { border-radius: 8px; }
-  /* Phone layout. */
   @media (max-width: 560px) {
     header { padding: 22px 16px 6px; }
     main { padding: 8px 16px 48px; }
@@ -285,7 +284,7 @@
 <body>
 <header>
   <h1>preflight<span class="x">x</span></h1>
-  <div class="tag">Single-cell FASTQ pre-flight — chemistry, assay, species &amp; genetic sex.</div>
+  <div class="tag">Single-cell FASTQ pre-flight: chemistry, assay, species, and genetic sex.</div>
   <div class="priv">🔒 No data is stored. Runs in your browser.</div>
 </header>
 
@@ -339,8 +338,8 @@
         <button class="tab ex" type="button" data-acc="SRP319698">SRP319698 · study (lists runs)</button>
       </div>
       <div class="examples">
-        <span class="examples-lbl">…or a species (real scRNA run):</span>
-        <select id="exSpecies"><option value="">— pick a species —</option></select>
+        <span class="examples-lbl">…or a species:</span>
+        <select id="exSpecies"><option value="">pick a species…</option></select>
       </div>
       <div class="status" id="accStatus" role="status" aria-live="polite"></div>
       <div id="runsWrap"></div>
@@ -357,7 +356,8 @@
           also infer genetic sex
         </label>
         <span class="sexadv" id="sexAdv" hidden>
-          <label class="n">species <select id="sexSpecies"></select></label>
+          <label class="n" id="sexSpeciesWrap">species <select id="sexSpecies"></select></label>
+          <span class="n sexdet" id="sexDetected" hidden>detected species: <b id="sexDetectedVal">—</b></span>
           <label class="n">sex reads <input type="number" id="sexReads" value="200000" min="1000" step="10000" /></label>
         </span>
         <span class="sexnote">
@@ -397,7 +397,6 @@ import init, { check, detect_assay, needed_whitelists, load_whitelist, load_pane
 // Last single-check report, kept for "Export report"; null after an assay-only detection.
 let lastReport = null;
 
-// Download a self-contained .html report from a report object or array (accession flow).
 function downloadReport(reportOrArray, filename) {
   const html = report_html_json(JSON.stringify(reportOrArray));
   const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
@@ -408,10 +407,9 @@ function downloadReport(reportOrArray, filename) {
 }
 
 // Panel provenance (data/panels.json): scientific_name -> {spanel, common_name, example_run}.
-// Loaded once; drives the species example dropdown AND the automatic sex-panel pick.
+// Drives the species example loader and the per-run sex-panel pick.
 let PANELS = [];
-let autoSpecies = null;            // {scientific, spanel, common} detected for the current accession
-const panelTextCache = new Map();  // spanel filename -> fetched .spanel text
+const panelTextCache = new Map();
 // Load eagerly, not behind wasm init(), so an early accession entry can't race it.
 const panelsReady = (async () => {
   try {
@@ -458,6 +456,8 @@ const els = {
   nreads: document.getElementById('nreads'),
   sexToggle: document.getElementById('sexToggle'), sexAdv: document.getElementById('sexAdv'),
   sexSpecies: document.getElementById('sexSpecies'), sexReads: document.getElementById('sexReads'),
+  sexSpeciesWrap: document.getElementById('sexSpeciesWrap'),
+  sexDetected: document.getElementById('sexDetected'), sexDetectedVal: document.getElementById('sexDetectedVal'),
   sexRow: document.getElementById('sexRow'), controls: document.querySelector('.controls'),
   exSpecies: document.getElementById('exSpecies'),
   btnCheck: document.getElementById('btnCheck'), btnAssay: document.getElementById('btnAssay'),
@@ -507,7 +507,10 @@ function setMode(next) {
   els.btnAssay.hidden = acc;
   els.verdict.style.display = acc ? 'none' : '';
   // accession mode places sexRow under "Run all"; other modes need it back in controls.
-  if (!acc && els.sexRow.parentElement !== els.controls) els.controls.appendChild(els.sexRow);
+  if (!acc) {
+    if (els.sexRow.parentElement !== els.controls) els.controls.appendChild(els.sexRow);
+    showDetectedSpecies(null); // upload/paste has no seqout metadata: fall back to the picker
+  }
   refresh();
 }
 for (const m of MODES) m.tab.addEventListener('click', () => setMode(m.mode));
@@ -658,13 +661,13 @@ function renderPlots(el, r) {
   const nuc = r.nucleus, end = r.end;
   let panelRows = '';
   if (nuc && nuc.reads_scanned) {
-    panelRows += bar(`single-cell vs nucleus — <b>${escapeHtml(nuc.verdict)}</b> ${pill(nuc.confidence)}`,
+    panelRows += bar(`single-cell vs nucleus: <b>${escapeHtml(nuc.verdict)}</b> ${pill(nuc.confidence)}`,
       nuc.intron_frac, 'var(--insert)', `intron ${(100 * nuc.intron_frac).toFixed(0)}%`);
     if (nuc.mito_pct != null)
       panelRows += bar('mitochondrial reads (cell ≫ nucleus)', nuc.mito_pct / 100, 'var(--poly)', nuc.mito_pct.toFixed(1) + '%');
   }
   if (end && end.reads_scanned) {
-    panelRows += bar(`transcript end — <b>${escapeHtml(end.end)}</b> bias ${pill(end.confidence)}`,
+    panelRows += bar(`transcript end: <b>${escapeHtml(end.end)}</b> bias ${pill(end.confidence)}`,
       end.ratio, 'var(--umi)', `3′ ${(100 * end.ratio).toFixed(0)}%`);
   }
   if (panelRows) html += `<h3>Library type (k-mer panels)</h3>${panelRows}`;
@@ -809,22 +812,24 @@ function renderCheck(r, ms) {
 }
 
 // Opt-in genetic sex, run only when the toggle is on, with its own deeper sampling.
+// `spec` is the run's detected species {scientific, spanel?, common?} (accession flow);
+// null falls back to the manual picker (upload/paste, where nothing detects the organism).
 // `setMsg` reports progress (status line or table cell). Returns the report or undefined.
-async function runSex(b1, b2, setMsg) {
+async function runSex(b1, b2, setMsg, spec) {
   if (!els.sexToggle.checked) return undefined;
   const sn = Math.max(1000, parseInt(els.sexReads.value, 10) || 200000);
-  // Score n reads: hosted panel if deployed, else fall back to the embedded human/mouse
-  // panel. wasm returns a visible "no panel" no-call for uncovered species, never a throw.
+  // wasm returns a visible "no panel" no-call for uncovered species, never a throw.
   const once = async n => {
-    if (autoSpecies && autoSpecies.spanel) {
+    if (spec && spec.spanel) {
       try {
-        const txt = await panelText(autoSpecies.spanel);
-        return JSON.parse(sex_with_panel(b1, b2, autoSpecies.scientific, txt, n));
+        const txt = await panelText(spec.spanel);
+        return JSON.parse(sex_with_panel(b1, b2, spec.scientific, txt, n));
       } catch {
         setMsg('hosted panel unavailable; trying embedded panel…');
-        return JSON.parse(sex(b1, b2, autoSpecies.common || autoSpecies.scientific, n));
+        return JSON.parse(sex(b1, b2, spec.common || spec.scientific, n));
       }
     }
+    if (spec && spec.scientific) return JSON.parse(sex(b1, b2, spec.scientific, n));
     return JSON.parse(sex(b1, b2, els.sexSpecies.value, n));
   };
   try {
@@ -833,7 +838,7 @@ async function runSex(b1, b2, setMsg) {
     let s = await once(sn);
     // Y/XIST hits are sparse; an uncertain call is often just shallow. Retry once at 2x.
     if (s && s.verdict === 'uncertain') {
-      setMsg(`uncertain — retrying at ${(2 * sn).toLocaleString()} reads…`);
+      setMsg(`uncertain, retrying at ${(2 * sn).toLocaleString()} reads…`);
       await new Promise(res => setTimeout(res, 0));
       s = await once(2 * sn);
     }
@@ -862,8 +867,8 @@ function renderSex(el, s) {
   if (v === 'error' || v === 'no_panel') {
     const sp = escapeHtml(s.species || 'this organism');
     const msg = v === 'error'
-      ? `Couldn't run — ${escapeHtml(s._error)}. Re-run the analysis to retry.`
-      : `Not available for <b>${sp}</b> — ${escapeHtml((s.notes && s.notes[0]) || `no sex-marker panel for ${s.species || 'this organism'}`)}`;
+      ? `Couldn't run: ${escapeHtml(s._error)}. Re-run the analysis to retry.`
+      : `Not available for <b>${sp}</b>: ${escapeHtml((s.notes && s.notes[0]) || `no sex-marker panel for ${s.species || 'this organism'}`)}`;
     el.innerHTML = `${SEX_HEAD}<div class="sexna">${msg}</div>`;
     return;
   }
@@ -894,7 +899,7 @@ function sexChip(s) {
   if (!s) return '';
   const muted = t => ` <span style="color:var(--muted)">· ${escapeHtml(t)}</span>`;
   const v = sexState(s);
-  if (v === 'error') return muted('sex: couldn’t run');
+  if (v === 'error') return muted("sex: couldn't run");
   if (v === 'no_panel') return muted('sex: no panel');
   if (v === 'male' || v === 'female') {
     const col = v === 'female' ? 'var(--insert)' : 'var(--accent)';
@@ -991,12 +996,12 @@ async function populateExamples() {
   await panelsReady;
   const opts = PANELS
     .filter(p => p.example_run)
-    .map(p => ({ run: p.example_run, label: `${p.common_name || p.scientific_name} — ${p.scientific_name.replace(/_/g, ' ')}` }))
+    .map(p => ({ run: p.example_run, label: p.common_name ? `${p.common_name} (${p.scientific_name.replace(/_/g, ' ')})` : p.scientific_name.replace(/_/g, ' ') }))
     .sort((a, b) => a.label.localeCompare(b.label));
   for (const o of opts) {
     const opt = document.createElement('option');
     opt.value = o.run;
-    opt.textContent = `${o.label}  ·  ${o.run}`;
+    opt.textContent = o.label;
     els.exSpecies.appendChild(opt);
   }
 }
@@ -1117,7 +1122,7 @@ async function runOne(ctx) {
     await new Promise(r => setTimeout(r, 0));
     const t0 = performance.now();
     const r = JSON.parse(check(b1, b2, n));
-    const sx = await runSex(b1, b2, m => { ctx.resCell.textContent = m; });
+    const sx = await runSex(b1, b2, m => { ctx.resCell.textContent = m; }, ctx.species);
     if (sx) r.sex = sx;
     const ms = performance.now() - t0;
     r._label = ctx.run.run_accession;
@@ -1190,7 +1195,7 @@ async function experimentInfo(srx) {
   return expInfoCache.get(srx);
 }
 // The first linked sample accession of an experiment record (samples[] holds strings or
-// {accession}). Shared by fillSampleCell and autoSelectSpecies.
+// {accession}).
 function firstSampleAcc(exp) {
   const s = (exp && exp.samples || [])[0];
   return typeof s === 'string' ? s : (s && s.accession) || null;
@@ -1220,7 +1225,7 @@ async function fillSampleCell(td, run) {
   }
 }
 
-function renderRunsTable(study, data, runs) {
+function renderRunsTable(study, data, runs, speciesByExp) {
   const head = document.createElement('div');
   head.className = 'runs-head';
   const meta = document.createElement('div');
@@ -1236,7 +1241,7 @@ function renderRunsTable(study, data, runs) {
 
   const table = document.createElement('table');
   table.className = 'runs';
-  table.innerHTML = '<thead><tr><th scope="col">run</th><th scope="col">sample / title</th><th scope="col">layout</th><th scope="col">FASTQ</th><th scope="col"><span class="sr-only">action</span></th><th scope="col">result</th></tr></thead>';
+  table.innerHTML = '<thead><tr><th scope="col">run</th><th scope="col">sample / title</th><th scope="col">species</th><th scope="col">layout</th><th scope="col">FASTQ</th><th scope="col"><span class="sr-only">action</span></th><th scope="col">result</th></tr></thead>';
   const tb = document.createElement('tbody');
   const ctxs = [];
   // Run a row, then enable export once it has a report.
@@ -1248,6 +1253,11 @@ function renderRunsTable(study, data, runs) {
     const tdSample = document.createElement('td'); tdSample.dataset.label = 'sample / title';
     tdSample.style.cssText = 'font-size:12px;line-height:1.35';
     fillSampleCell(tdSample, run);   // ids shown immediately; GSM + title filled in lazily
+    const species = speciesFor(speciesByExp && speciesByExp.get(run.experiment_accession));
+    const tdSpecies = document.createElement('td'); tdSpecies.dataset.label = 'species';
+    tdSpecies.style.cssText = 'font-size:12px';
+    tdSpecies.textContent = species ? speciesLabel(species) : '–';
+    if (species && !species.hasPanel) tdSpecies.style.color = 'var(--muted)';
     const tdLay = document.createElement('td'); tdLay.dataset.label = 'layout'; tdLay.textContent = (run.library_layout || '–').toLowerCase();
     const tdFiles = document.createElement('td');
     tdFiles.dataset.label = 'FASTQ';
@@ -1258,13 +1268,13 @@ function renderRunsTable(study, data, runs) {
     const tdRes = document.createElement('td'); tdRes.className = 'res'; tdRes.dataset.label = 'result';
     if (!reads) { btn.disabled = true; tdRes.textContent = 'no FASTQ'; }
     tdBtn.append(btn);
-    tr.append(tdAcc, tdSample, tdLay, tdFiles, tdBtn, tdRes);
+    tr.append(tdAcc, tdSample, tdSpecies, tdLay, tdFiles, tdBtn, tdRes);
     const detailTr = document.createElement('tr'); detailTr.className = 'detail'; detailTr.hidden = true;
-    const detailTd = document.createElement('td'); detailTd.colSpan = 6;
+    const detailTd = document.createElement('td'); detailTd.colSpan = 7;
     const why = document.createElement('div'); why.className = 'why';
     detailTd.append(why); detailTr.append(detailTd);
     tb.append(tr, detailTr);
-    const ctx = { run, reads, btn, resCell: tdRes, detailTr, why, soleRun: runs.length === 1 };
+    const ctx = { run, reads, btn, resCell: tdRes, detailTr, why, species, soleRun: runs.length === 1 };
     ctxs.push(ctx);
     btn.addEventListener('click', () => runCtx(ctx));
   }
@@ -1273,6 +1283,9 @@ function renderRunsTable(study, data, runs) {
   wrap.className = 'table-wrap';
   wrap.append(table);
   els.runsWrap.replaceChildren(head, els.sexRow, wrap);
+
+  const detected = [...new Map(ctxs.filter(c => c.species).map(c => [c.species.scientific, c.species])).values()];
+  showDetectedSpecies(detected.map(speciesLabel));
 
   exportBtn.addEventListener('click', () => {
     const reports = ctxs.map(c => c.report).filter(Boolean);
@@ -1290,42 +1303,53 @@ function renderRunsTable(study, data, runs) {
   });
 }
 
-function clearAutoSpecies() {
-  autoSpecies = null;
-  [...els.sexSpecies.options].filter(o => o.dataset.auto).forEach(o => o.remove());
+// seqout scientific_name -> the species object runSex consumes. Without a hosted panel
+// it still scores against the embedded human/mouse panels (a clean no-call otherwise).
+function speciesFor(name) {
+  if (!name) return null;
+  const panel = findPanel(name);
+  return panel
+    ? { scientific: panel.scientific_name, spanel: panel.spanel, common: panel.common_name, hasPanel: true }
+    : { scientific: name, common: name, hasPanel: false };
 }
-// Fully automatic species pick: read the organism from the run's seqout metadata,
-// match it against the panel provenance, and stash the panel so the sex check uses
-// it (sex_with_panel) — no dropdown, any catalogued species, not just human/mouse.
-async function autoSelectSpecies(run) {
-  try {
-    clearAutoSpecies();
-    await panelsReady;
-    if (!run || !run.experiment_accession) return;
-    const exp = await experimentInfo(run.experiment_accession);   // shared cache; dedups fillSampleCell's fetch
-    const acc = firstSampleAcc(exp);
-    if (!acc) return;
-    const name = (await apiJson(`/sample/${acc}`)).scientific_name || '';
-    if (!name) return;
-    const panel = findPanel(name);
-    if (panel) {
-      autoSpecies = { scientific: panel.scientific_name, spanel: panel.spanel, common: panel.common_name };
-      const label = panel.common_name ? `${panel.common_name} (${name})` : name;
-      // reflect it in the (now optional) dropdown for transparency / override
-      const opt = new Option(`${label} — auto`, panel.scientific_name);
-      opt.dataset.auto = '1';
-      els.sexSpecies.add(opt);
-      els.sexSpecies.value = panel.scientific_name;
-      els.accStatus.insertAdjacentText('beforeend', ` · species: ${label} → ${panel.spanel}`);
-    } else {
-      const opt = new Option(`${name} (no panel)`, name);
-      opt.dataset.auto = '1';
-      els.sexSpecies.add(opt);
-      els.sexSpecies.value = name;
-      els.accStatus.insertAdjacentHTML('beforeend',
-        ` · <span style="color:var(--bad)">genetic sex: no panel for ${escapeHtml(name)}</span>`);
-    }
-  } catch {}
+function speciesLabel(sp) {
+  if (!sp) return '–';
+  const sci = sp.scientific.replace(/_/g, ' ');
+  const base = sp.common && sp.common !== sp.scientific ? `${sp.common} (${sci})` : sci;
+  return sp.hasPanel ? base : `${base} · no panel`;
+}
+
+// experiment accession -> sample scientific_name, in two bulk seqout calls. Resolved per
+// experiment because a study (e.g. GSE303115) can mix species across its runs.
+async function studySpeciesByExperiment(study) {
+  const map = new Map();
+  const [samplesRes, exps] = await Promise.all([
+    apiJson(`/project/${study}/samples`).catch(() => null),
+    apiJson(`/project/${study}/experiments`).catch(() => null),
+  ]);
+  const byAcc = new Map((samplesRes && samplesRes.samples || []).map(s => [s.accession, s.scientific_name]));
+  for (const e of (exps || [])) {
+    const sacc = firstSampleAcc(e);
+    if (e.accession && byAcc.has(sacc)) map.set(e.accession, byAcc.get(sacc));
+  }
+  return map;
+}
+async function resolveOneSpecies(run) {
+  if (!run || !run.experiment_accession) return new Map();
+  const exp = await experimentInfo(run.experiment_accession);
+  const acc = firstSampleAcc(exp);
+  if (!acc) return new Map();
+  const name = (await apiJson(`/sample/${acc}`).catch(() => ({}))).scientific_name;
+  return name ? new Map([[run.experiment_accession, name]]) : new Map();
+}
+
+// Read-only "detected species" field vs the manual picker: seqout populates the field
+// (accession flow); its absence (upload/paste) leaves the picker in place.
+function showDetectedSpecies(labels) {
+  const on = labels && labels.length;
+  if (on) els.sexDetectedVal.textContent = labels.join(', ');
+  els.sexDetected.hidden = !on;
+  els.sexSpeciesWrap.hidden = !!on;
 }
 
 async function fetchRuns() {
@@ -1334,26 +1358,29 @@ async function fetchRuns() {
   els.btnFetchRuns.disabled = true;
   els.runsWrap.replaceChildren();
   try {
+    await panelsReady;
     if (RUN_RE.test(raw.toUpperCase())) {
       accStatus(`fetching ${raw.toUpperCase()}…`);
       const run = await apiJson(`/run/${raw.toUpperCase()}`);
       const paired = (run.library_layout || '').toUpperCase() === 'PAIRED';
       const data = { total_runs: 1, paired_runs: paired ? 1 : 0, single_runs: paired ? 0 : 1 };
-      renderRunsTable(run.study_accession || run.run_accession, data, [run]);
+      const species = await resolveOneSpecies(run).catch(() => new Map());
+      renderRunsTable(run.study_accession || run.run_accession, data, [run], species);
       accStatus(`run ${run.run_accession}${run.study_accession ? ` (study ${run.study_accession})` : ''}`);
-      autoSelectSpecies(run);
       return;
     }
     accStatus(`resolving ${raw}…`);
     const study = await resolveStudy(raw);
     accStatus(`fetching runs for ${study}…`);
-    const data = await apiJson(`/project/${study}/runs`);
+    const [data, species] = await Promise.all([
+      apiJson(`/project/${study}/runs`),
+      studySpeciesByExperiment(study).catch(() => new Map()),
+    ]);
     const runs = data.runs || [];
     if (!runs.length) { accStatus(`no runs found for ${study}`, true); return; }
-    renderRunsTable(study, data, runs);
+    renderRunsTable(study, data, runs, species);
     const shown = runs.length < data.total_runs ? ` (showing first ${runs.length})` : '';
     accStatus(`${data.total_runs} run(s) in ${study}${shown}`);
-    autoSelectSpecies(runs[0]);
   } catch (e) {
     accStatus('error: ' + (e && e.message ? e.message : e), true);
   } finally {
