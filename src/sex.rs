@@ -404,6 +404,15 @@ impl SexReport {
         self.verdict == "uncertain"
     }
 
+    // Weak = uncertain, or unknown with sub-floor hits. Zero-hit unknown is not weak.
+    pub fn is_weak(&self) -> bool {
+        if self.verdict == "uncertain" {
+            return true;
+        }
+        let hits = self.y_hit_reads + self.xist_hit_reads;
+        self.verdict == "unknown" && hits > 0 && hits < MIN_HITS
+    }
+
     pub fn print(&self) {
         println!("{}", "Genetic sex (sample-level)".bold().cyan());
         let v = match self.verdict.as_str() {
@@ -530,6 +539,24 @@ mod tests {
                                                    // Y count is below the absolute floor
         assert_eq!(classify(5, 0), "unknown"); // total 5 < MIN_HITS
         assert_eq!(classify(6, 2), "uncertain"); // total 8, ratio 3 but y=6 < MALE_MIN -> not male
+    }
+
+    #[test]
+    fn is_weak_covers_subthreshold_unknown_not_zerohit() {
+        let panel = for_species("human").unwrap();
+        let mk = |y, x| analyze(panel, "human", &Tally {
+            scanned: 200_000, too_short: 0, y_hit_reads: y, xist_hit_reads: x,
+            gene_reads: vec![0; panel.genes.len()],
+        });
+        // partial evidence under the floor -> weak (depth-limited, deepen it)
+        assert!(mk(5, 0).is_weak(), "sub-threshold unknown y=5 should be weak");
+        assert!(mk(3, 2).is_weak(), "sub-threshold unknown total=5 should be weak");
+        // no evidence at all -> NOT weak (species mismatch; more reads won't help)
+        assert!(!mk(0, 0).is_weak(), "zero-hit unknown must not be weak");
+        // a confident call is not weak
+        assert!(!mk(40, 2).is_weak(), "clean male is not weak");
+        // uncertain is still weak
+        assert!(mk(10, 25).is_weak(), "uncertain should be weak");
     }
 
     fn read_with_kmer(kmer: &[u8], total_len: usize) -> Vec<u8> {

@@ -12,19 +12,22 @@ use crate::{
     speciespanel, whitelists,
 };
 
-/// Sparse-signal detectors (sex, species) under-call on shallow samples. Run `score(n)`,
-/// and if the result is still `weak`, resample once at 2x depth before accepting it.
+// Rare markers can need ~1M reads to clear the calling floor; cap depth-chasing here.
+const DEEPEN_CAP: usize = 2_000_000;
+
+// Resample at doubling depth while the result is weak, up to DEEPEN_CAP.
 fn deepen_if_weak<T>(
     n: usize,
     weak: impl Fn(&T) -> bool,
     mut score: impl FnMut(usize) -> Result<T>,
 ) -> Result<T> {
-    let first = score(n)?;
-    if weak(&first) {
-        score(n * 2)
-    } else {
-        Ok(first)
+    let mut depth = n;
+    let mut r = score(depth)?;
+    while weak(&r) && depth < DEEPEN_CAP {
+        depth = (depth * 2).min(DEEPEN_CAP);
+        r = score(depth)?;
     }
+    Ok(r)
 }
 
 /// Print a cache directory path, as `{"<key>": "<path>"}` under `--json`.
@@ -60,7 +63,7 @@ fn species_and_sex(
     let catalogue = speciespanel::Catalogue::load()?;
     if catalogue.is_empty() {
         let sp = declared.unwrap_or("human");
-        let sx = deepen_if_weak(sex_reads, SexReport::is_uncertain, |n| {
+        let sx = deepen_if_weak(sex_reads, SexReport::is_weak, |n| {
             sex::detect_sex_auto(r1, r2, sp, n)
         })?;
         Ok((None, sx))
@@ -71,7 +74,7 @@ fn species_and_sex(
         let (sp, sx) = deepen_if_weak(
             sex_reads,
             |(sp, sx): &(species::SpeciesReport, sex::SexReport)| {
-                sp.is_unknown() || sx.is_uncertain()
+                sp.is_unknown() || sx.is_weak()
             },
             |n| {
                 let reads = sex::sample_cdna(r1, r2, n)?;
@@ -290,7 +293,7 @@ pub fn run() -> Result<()> {
         Cmd::Sex { r1, r2 } => {
             let sp = cli.species.as_deref().unwrap_or("human");
             let catalogue = speciespanel::Catalogue::load()?;
-            let s = deepen_if_weak(cli.sex_reads, SexReport::is_uncertain, |n| {
+            let s = deepen_if_weak(cli.sex_reads, SexReport::is_weak, |n| {
                 sex::detect_sex_auto_cat(&r1, r2.as_deref(), &catalogue, sp, n)
             })?;
             if cli.json {
