@@ -15,6 +15,41 @@ fn http_client() -> &'static reqwest::blocking::Client {
     HTTP_CLIENT.get_or_init(reqwest::blocking::Client::new)
 }
 
+/// Logs per-pull setup vs throughput when `PREFLIGHTX_FETCH_TIMING` is set.
+#[cfg(not(target_arch = "wasm32"))]
+struct TimedReader<R> {
+    inner: R,
+    url: String,
+    setup: std::time::Duration,
+    start: std::time::Instant,
+    bytes: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<R: std::io::Read> std::io::Read for TimedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.bytes += n as u64;
+        Ok(n)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<R> Drop for TimedReader<R> {
+    fn drop(&mut self) {
+        let body = self.start.elapsed().as_secs_f64();
+        let mb = self.bytes as f64 / 1e6;
+        eprintln!(
+            "fetch-timing {}: setup(connect+headers)={:.0}ms  pulled={:.2}MB in {:.0}ms ({:.1} MB/s)",
+            self.url,
+            self.setup.as_secs_f64() * 1000.0,
+            mb,
+            body * 1000.0,
+            if body > 0.0 { mb / body } else { 0.0 },
+        );
+    }
+}
+
 /// In-browser virtual file system. The wasm-bindgen entry point ([`crate::wasm`])
 /// loads the uploaded FASTQ bytes here keyed by a synthetic name (e.g. `"r1"`),
 /// then calls the unchanged `&Path`-based analysis functions with that name as
@@ -56,10 +91,54 @@ pub mod vfs {
     }
 }
 
-/// True if `path` is an http(s) URL rather than a local filesystem path.
+/// True if `path` is an http(s)/ftp URL rather than a local filesystem path.
 pub fn is_remote(path: &Path) -> bool {
     let s = path.to_string_lossy();
-    s.starts_with("http://") || s.starts_with("https://")
+    s.starts_with("http://") || s.starts_with("https://") || s.starts_with("ftp://")
+}
+
+/// Hosts to reach over FTP instead of HTTP (see `prefer_ftp`).
+#[cfg(not(target_arch = "wasm32"))]
+const FTP_PREFERRED_HOSTS: &[&str] = &["ftp.sra.ebi.ac.uk"];
+
+/// FTP hosts that failed this run; later opens skip straight to HTTP.
+#[cfg(not(target_arch = "wasm32"))]
+static FTP_DEAD_HOSTS: OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    OnceLock::new();
+
+#[cfg(not(target_arch = "wasm32"))]
+fn ftp_dead_hosts() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    FTP_DEAD_HOSTS.get_or_init(Default::default)
+}
+
+/// Rewrite http(s) to `ftp://` for FTP-preferred hosts. `PREFLIGHTX_NO_FTP` disables it.
+#[cfg(not(target_arch = "wasm32"))]
+fn prefer_ftp(url: &str) -> String {
+    if std::env::var_os("PREFLIGHTX_NO_FTP").is_some() {
+        return url.to_string();
+    }
+    for scheme in ["https://", "http://"] {
+        if let Some(rest) = url.strip_prefix(scheme) {
+            let host = rest.split('/').next().unwrap_or("");
+            if FTP_PREFERRED_HOSTS.contains(&host) {
+                return format!("ftp://{rest}");
+            }
+        }
+    }
+    url.to_string()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn is_ftp(url: &str) -> bool {
+    url.starts_with("ftp://")
+}
+
+/// Split `ftp://host/dir/file` into `("host", "/dir/file")`.
+#[cfg(not(target_arch = "wasm32"))]
+fn split_ftp(url: &str) -> Result<(String, String)> {
+    let rest = url.strip_prefix("ftp://").context("not an ftp url")?;
+    let slash = rest.find('/').context("ftp url has no path")?;
+    Ok((rest[..slash].to_string(), rest[slash..].to_string()))
 }
 
 /// True if `bytes` begin with the gzip magic number.
@@ -67,8 +146,7 @@ pub fn is_gzip(bytes: &[u8]) -> bool {
     bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b
 }
 
-/// GET `url`, retrying transient failures (connection drops, timeouts, 5xx) with
-/// linear backoff; remote FASTQ hosts (SRA/ENA) flake intermittently. 4xx fails fast.
+/// GET `url` with linear-backoff retries on transient failures. 4xx fails fast.
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_with_retry(url: &str) -> Result<reqwest::blocking::Response> {
     const ATTEMPTS: u32 = 4;
@@ -90,29 +168,171 @@ fn fetch_with_retry(url: &str) -> Result<reqwest::blocking::Response> {
                 .with_context(|| format!("fetching fastq after {ATTEMPTS} attempts: {url}"));
         }
         eprintln!(
-            "warning: fetch of {url} failed (attempt {attempt}/{ATTEMPTS}): {err:#}; retrying…"
+            "warning: fetch of {url} failed (attempt {attempt}/{ATTEMPTS}): {err:#}; retrying"
         );
         std::thread::sleep(std::time::Duration::from_secs(2 * attempt as u64));
     }
     unreachable!()
 }
 
-/// Open a fastx reader for a local file, an http(s) URL, or (on wasm) an
-/// in-memory buffer from [`vfs`].
-///
-/// Remote inputs are streamed: we only pull bytes as records are consumed, so
-/// sampling the first N reads of a multi-GB remote fastq downloads just the
-/// leading chunk, not the whole file. Compression (gzip/bz2/xz) is detected
-/// from the stream's magic bytes by needletail, exactly as for local files.
+/// Holds the control connection open so the RETR stream isn't torn down.
+#[cfg(not(target_arch = "wasm32"))]
+struct FtpReader<R> {
+    data: R,
+    _ctrl: suppaftp::FtpStream,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<R: std::io::Read> std::io::Read for FtpReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.data.read(buf)
+    }
+}
+
+/// Anonymous FTP stream. Binary mode is required or gzip bytes get mangled.
+#[cfg(not(target_arch = "wasm32"))]
+fn ftp_reader(url: &str) -> Result<Box<dyn std::io::Read + Send>> {
+    use std::net::ToSocketAddrs;
+    use suppaftp::{types::FileType, FtpStream};
+    let (host, path) = split_ftp(url)?;
+    // Bounded connect so a firewalled port fails fast.
+    let addr = (host.as_str(), 21)
+        .to_socket_addrs()
+        .with_context(|| format!("resolving FTP host {host}"))?
+        .next()
+        .with_context(|| format!("no address for FTP host {host}"))?;
+    let mut ftp = FtpStream::connect_timeout(addr, std::time::Duration::from_secs(10))
+        .with_context(|| format!("FTP connect {host}"))?;
+    ftp.login("anonymous", "anonymous")
+        .context("FTP anonymous login")?;
+    ftp.transfer_type(FileType::Binary)
+        .context("FTP set binary mode")?;
+    let data = ftp
+        .retr_as_stream(&path)
+        .with_context(|| format!("FTP RETR {path}"))?;
+    // DataStream is unbuffered; buffer it for the gzip decoder's small reads.
+    let data = std::io::BufReader::with_capacity(64 * 1024, data);
+    Ok(Box::new(FtpReader { data, _ctrl: ftp }))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn http_reader(url: &str) -> Result<Box<dyn std::io::Read + Send>> {
+    Ok(Box::new(fetch_with_retry(url)?))
+}
+
+/// Byte reader for a remote URL: try FTP where preferred, fall back to HTTP and
+/// memoize the dead host.
+#[cfg(not(target_arch = "wasm32"))]
+fn remote_reader(orig: &str) -> Result<Box<dyn std::io::Read + Send>> {
+    let url = prefer_ftp(orig);
+    if !is_ftp(&url) {
+        return http_reader(&url);
+    }
+    let host = split_ftp(&url).map(|(h, _)| h).unwrap_or_default();
+    if !is_ftp(orig) && ftp_dead_hosts().lock().unwrap().contains(&host) {
+        return http_reader(orig);
+    }
+    match ftp_reader(&url) {
+        Ok(r) => Ok(r),
+        Err(e) if !is_ftp(orig) => {
+            eprintln!("warning: FTP fetch of {url} failed ({e:#}); falling back to HTTP");
+            ftp_dead_hosts().lock().unwrap().insert(host);
+            http_reader(orig)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Per-run cache of remote bytes, keyed by URL, so a mate opened by many checks
+/// downloads once.
+#[cfg(not(target_arch = "wasm32"))]
+mod bodycache {
+    use super::Result;
+    use std::collections::HashMap;
+    use std::io::Read;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    struct Body {
+        buf: Vec<u8>,
+        upstream: Option<Box<dyn Read + Send>>,
+    }
+
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<Mutex<Body>>>>> = OnceLock::new();
+
+    fn cache() -> &'static Mutex<HashMap<String, Arc<Mutex<Body>>>> {
+        CACHE.get_or_init(Default::default)
+    }
+
+    /// Own cursor over the shared buffer; pulls from the network only past what's cached.
+    pub struct CachedReader {
+        body: Arc<Mutex<Body>>,
+        pos: usize,
+    }
+
+    impl Read for CachedReader {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            let mut body = self.body.lock().unwrap();
+            while body.buf.len() <= self.pos && body.upstream.is_some() {
+                let mut chunk = [0u8; 64 * 1024];
+                let n = body.upstream.as_mut().unwrap().read(&mut chunk)?;
+                if n == 0 {
+                    body.upstream = None;
+                } else {
+                    body.buf.extend_from_slice(&chunk[..n]);
+                }
+            }
+            let avail = body.buf.len().saturating_sub(self.pos);
+            let k = avail.min(out.len());
+            out[..k].copy_from_slice(&body.buf[self.pos..self.pos + k]);
+            self.pos += k;
+            Ok(k)
+        }
+    }
+
+    /// `fetch` runs only on first open of `url`, with the map lock released so
+    /// concurrent opens of other URLs don't serialize.
+    pub fn reader(
+        url: &str,
+        fetch: impl FnOnce() -> Result<Box<dyn Read + Send>>,
+    ) -> Result<CachedReader> {
+        if let Some(b) = cache().lock().unwrap().get(url).cloned() {
+            return Ok(CachedReader { body: b, pos: 0 });
+        }
+        let up = fetch()?;
+        let b = Arc::new(Mutex::new(Body {
+            buf: Vec::new(),
+            upstream: Some(up),
+        }));
+        cache().lock().unwrap().insert(url.to_string(), b.clone());
+        Ok(CachedReader { body: b, pos: 0 })
+    }
+}
+
+/// Open a fastx reader for a local file or http(s)/ftp URL. Remote inputs stream,
+/// cached per-URL via [`bodycache`].
 #[cfg(not(target_arch = "wasm32"))]
 fn open(path: &Path) -> Result<Box<dyn FastxReader>> {
-    if is_remote(path) {
-        let url = path.to_string_lossy();
-        let resp = fetch_with_retry(url.as_ref())?;
-        parse_fastx_reader(resp).with_context(|| format!("parsing remote fastq: {url}"))
-    } else {
-        parse_fastx_file(path).with_context(|| format!("opening fastq: {}", path.display()))
+    if !is_remote(path) {
+        return parse_fastx_file(path).with_context(|| format!("opening fastq: {}", path.display()));
     }
+    let orig = path.to_string_lossy();
+    let t0 = std::time::Instant::now();
+    let raw: Box<dyn std::io::Read + Send> =
+        Box::new(bodycache::reader(&orig, || remote_reader(&orig))?);
+    let setup = t0.elapsed();
+    let reader: Box<dyn std::io::Read + Send> =
+        if std::env::var_os("PREFLIGHTX_FETCH_TIMING").is_some() {
+            Box::new(TimedReader {
+                inner: raw,
+                url: orig.to_string(),
+                setup,
+                start: std::time::Instant::now(),
+                bytes: 0,
+            })
+        } else {
+            raw
+        };
+    parse_fastx_reader(reader).with_context(|| format!("parsing remote fastq: {orig}"))
 }
 
 /// Wasm build: there is no filesystem and no blocking network. Input must have
@@ -183,6 +403,35 @@ where
     Ok(seen)
 }
 
+/// Run two fallible producers concurrently. Overlaps remote R1/R2 fetches.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn par_pair<A, B, FA, FB>(fa: FA, fb: FB) -> Result<(A, B)>
+where
+    FA: FnOnce() -> Result<A> + Send,
+    FB: FnOnce() -> Result<B> + Send,
+    A: Send,
+    B: Send,
+{
+    std::thread::scope(|s| {
+        let ha = s.spawn(fa);
+        let b = fb()?;
+        let a = ha
+            .join()
+            .map_err(|_| anyhow::anyhow!("paired fetch thread panicked"))??;
+        Ok((a, b))
+    })
+}
+
+/// Wasm has no threads; run sequentially.
+#[cfg(target_arch = "wasm32")]
+pub fn par_pair<A, B, FA, FB>(fa: FA, fb: FB) -> Result<(A, B)>
+where
+    FA: FnOnce() -> Result<A>,
+    FB: FnOnce() -> Result<B>,
+{
+    Ok((fa()?, fb()?))
+}
+
 /// Owned sampled reads: `(sequences, qualities)`.
 pub type SampledReads = (Vec<Vec<u8>>, Vec<Vec<u8>>);
 
@@ -199,9 +448,16 @@ pub fn sample(path: &Path, n: usize) -> Result<SampledReads> {
     Ok((seqs, quals))
 }
 
-/// Of two read files, the one whose first `probe` reads are longer on average — i.e. the
+/// First `n` sequences only (no quality copy). The common detector input.
+pub fn sample_seqs(path: &Path, n: usize) -> Result<Vec<Vec<u8>>> {
+    let mut seqs = Vec::with_capacity(n);
+    for_each_record(path, n, |seq, _| seqs.push(seq.to_vec()))?;
+    Ok(seqs)
+}
+
+/// Of two read files, the one whose first `probe` reads are longer on average: the
 /// cDNA insert rather than the short barcode/UMI read. Assay-agnostic (works for 10x,
-/// Parse, Drop-seq, …); ties (e.g. paired full-length reads) return `a`.
+/// Parse, Drop-seq); ties (e.g. paired full-length reads) return `a`.
 pub fn longer_read<'a>(a: &'a Path, b: &'a Path, probe: usize) -> Result<&'a Path> {
     fn mean_len(p: &Path, probe: usize) -> Result<f64> {
         let mut total = 0u64;
@@ -212,11 +468,8 @@ pub fn longer_read<'a>(a: &'a Path, b: &'a Path, probe: usize) -> Result<&'a Pat
         })?;
         Ok(if n == 0 { 0.0 } else { total as f64 / n as f64 })
     }
-    Ok(if mean_len(a, probe)? >= mean_len(b, probe)? {
-        a
-    } else {
-        b
-    })
+    let (la, lb) = par_pair(|| mean_len(a, probe), || mean_len(b, probe))?;
+    Ok(if la >= lb { a } else { b })
 }
 
 /// Stream paired reads from two FASTQ files in batches of `batch_size`.
@@ -344,6 +597,31 @@ mod tests {
             err.kind,
             err.msg
         );
+    }
+
+    #[test]
+    fn prefer_ftp_rewrites_only_ena_hosts() {
+        // ENA host over http(s) → ftp, path preserved.
+        assert_eq!(
+            prefer_ftp("https://ftp.sra.ebi.ac.uk/vol1/fastq/SRR123/x.fastq.gz"),
+            "ftp://ftp.sra.ebi.ac.uk/vol1/fastq/SRR123/x.fastq.gz"
+        );
+        // Non-ENA host untouched.
+        assert_eq!(
+            prefer_ftp("https://example.com/a.fastq.gz"),
+            "https://example.com/a.fastq.gz"
+        );
+        // Already ftp / local path untouched.
+        assert_eq!(prefer_ftp("ftp://ftp.sra.ebi.ac.uk/x"), "ftp://ftp.sra.ebi.ac.uk/x");
+        assert_eq!(prefer_ftp("/local/x.fastq.gz"), "/local/x.fastq.gz");
+    }
+
+    #[test]
+    fn split_ftp_separates_host_and_path() {
+        let (h, p) = split_ftp("ftp://ftp.sra.ebi.ac.uk/vol1/fastq/x.gz").unwrap();
+        assert_eq!(h, "ftp.sra.ebi.ac.uk");
+        assert_eq!(p, "/vol1/fastq/x.gz");
+        assert!(split_ftp("ftp://nohost").is_err());
     }
 
     #[test]

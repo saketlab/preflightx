@@ -70,8 +70,8 @@ pub struct DetectReport {
 
 /// Sample both files and rank the catalogued assays against them.
 pub fn detect(r1: &Path, r2: &Path, n: usize) -> Result<DetectReport> {
-    let (r1_seqs, _) = fastq::sample(r1, n)?;
-    let (r2_seqs, _) = fastq::sample(r2, n)?;
+    let (r1_seqs, r2_seqs) =
+        fastq::par_pair(|| fastq::sample_seqs(r1, n), || fastq::sample_seqs(r2, n))?;
     let assays = embedded_assays();
     let sets = load_cached_onlists();
     let hits = detect_assays(&r1_seqs, &r2_seqs, assays, &sets, 5);

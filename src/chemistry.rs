@@ -148,8 +148,8 @@ pub fn candidate_whitelist_files(r1: &Path, r2: &Path, n: usize) -> Result<Vec<&
 /// looks long and R2 looks like a barcode read, treat them as swapped. Returns the
 /// effective (r1, r2) ordering and whether a swap was applied.
 fn orient<'a>(r1: &'a Path, r2: &'a Path) -> Result<(&'a Path, &'a Path, bool)> {
-    let (a_quick, _) = fastq::sample(r1, 1_000)?;
-    let (b_quick, _) = fastq::sample(r2, 1_000)?;
+    let (a_quick, b_quick) =
+        fastq::par_pair(|| fastq::sample_seqs(r1, 1_000), || fastq::sample_seqs(r2, 1_000))?;
     let swapped =
         !fits_barcode_len(dominant_len(&a_quick)) && fits_barcode_len(dominant_len(&b_quick));
     Ok(if swapped {
