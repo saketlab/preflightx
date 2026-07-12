@@ -8,21 +8,21 @@ use crate::assay::{AnchorMotif, AssaySpec, ASSAYS, TSO_PRESENT};
 use crate::fastq;
 use crate::stats::{bernoulli_llr, dominant_len};
 
-// TSO background rate: fraction of R2 reads where the 13-mer appears by chance.
+// Rate at which the TSO 13-mer appears in R2 by chance.
 const P_TSO_BACKGROUND: f64 = 0.01;
-// Expected CB match rates when the whitelist is correct vs wrong.
+// CB match rates expected when the whitelist is correct vs wrong.
 const P_WL_CORRECT: f64 = 0.70;
 const P_WL_NULL: f64 = 0.01;
 
-// Thresholds are per-read (LLR / n_reads) so they are sample-size-independent.
-const HIGH_LL_PER_READ: f64 = 0.30; // strong total evidence
-const HIGH_GAP_PER_READ: f64 = 0.10; // top assay uniquely ahead of second
-const MEDIUM_LL_PER_READ: f64 = 0.001; // any positive discrimination
+// Per-read (LLR / n_reads) so the thresholds are sample-size-independent.
+const HIGH_LL_PER_READ: f64 = 0.30;
+const HIGH_GAP_PER_READ: f64 = 0.10; // lead over the runner-up
+const MEDIUM_LL_PER_READ: f64 = 0.001;
 
 // SPRT early-stopping (no-whitelist path only; whitelist needs a large CB sample).
-const SPRT_THRESHOLD: f64 = 200.0; // nats; |TSO LLR| above this decides the family
-const SPRT_MIN_READS: usize = 5_000; // never stop before this many pairs
-const SPRT_BATCH: usize = 2_000; // pairs per streaming batch
+const SPRT_THRESHOLD: f64 = 200.0; // nats
+const SPRT_MIN_READS: usize = 5_000;
+const SPRT_BATCH: usize = 2_000;
 
 #[derive(Serialize, Debug)]
 pub struct WhitelistScore {
@@ -43,13 +43,12 @@ pub struct ToolHint {
     pub hint: String,
 }
 
-/// One reasoning step in the verdict's evidence ledger: a signal, what was observed,
-/// the nats of log-likelihood it contributed to the winner, and what it implies.
+/// One reasoning step in the verdict's evidence ledger.
 #[derive(Serialize, Debug)]
 pub struct Evidence {
     pub signal: String,
     pub observation: String,
-    /// Nats of log-likelihood this signal added to the winner (None for non-LLR steps).
+    /// Nats of log-likelihood this signal added to the winner; None for non-LLR steps.
     pub llr_contribution: Option<f64>,
     pub conclusion: String,
 }
@@ -67,25 +66,21 @@ pub struct ChemReport {
     pub umi_offset: usize,
     pub umi_len: usize,
     pub n_cb_candidates: usize,
-    /// False when the reads show no single-cell signal (bulk/genomic): no
-    /// barcode-length R1, no TSO, no whitelist overlap. When false, `assay_id`
-    /// is `"none"` and the call should be read as "not single-cell".
+    /// False when the reads show no single-cell signal at all; assay_id is then "none".
     pub is_single_cell: bool,
-    /// True when sampling stopped early (SPRT decided), so `reads_sampled < n` is
-    /// expected rather than a truncated input.
+    /// SPRT stopped sampling early, so reads_sampled < n is expected, not a truncated input.
     pub early_stop: bool,
     pub whitelist: Option<String>,
     pub whitelist_scores: Vec<WhitelistScore>,
     pub anchor_scores: Vec<AnchorScore>,
     pub tool_hints: Vec<ToolHint>,
     pub confidence: String,
-    /// ATAC-vs-RNA read-content modality: "atac" | "rna" | "unknown". "atac" overrides the
-    /// RNA chemistry call (assay_id "atac", is_single_cell false).
+    /// "atac" | "rna" | "unknown"; "atac" overrides the RNA chemistry call.
     pub modality: String,
     /// promoter / (promoter + exon) k-mer hits; high -> ATAC. 0.0 when no panel/hits.
     pub atac_promoter_frac: f64,
-    /// Transcript-end polarity from the 3'/5' k-mer panel, independent of R1 geometry
-    /// (which cannot tell 3'v2 from 5'): "3'" | "5'" | "full-length" | "ambiguous" | "unknown".
+    /// "3'" | "5'" | "full-length" | "ambiguous" | "unknown", from the k-mer panel;
+    /// R1 geometry alone cannot tell 3'v2 from 5'.
     pub end: String,
     pub end_confidence: String,
     /// Reads hitting a 5'-end / 3'-end transcript marker, and r = n3/(n3+n5).
@@ -103,7 +98,7 @@ pub fn detect(
     whitelist_cache: Option<&Path>,
     species: Option<&str>,
 ) -> Result<ChemReport> {
-    // orient + sample + load whitelists (I/O) → analyze (pure) → build_report (pure).
+    // orient + sample + load whitelists (I/O) -> analyze (pure) -> build_report (pure).
     let (eff_r1, eff_r2, swapped) = orient(r1, r2)?;
     let wl_sets = match whitelist_cache {
         Some(cache) => {
@@ -114,8 +109,7 @@ pub fn detect(
         }
         None => HashMap::new(),
     };
-    // Full sample (no SPRT early-stop) when a whitelist cache or a k-mer panel is
-    // available; all need depth (CB overlap, 3'/5' + ATAC housekeeping hits).
+    // Whitelist overlap and the k-mer panels all need depth, so skip the SPRT early-stop.
     let want_full =
         !wl_sets.is_empty() || crate::endpanel::have_panels() || crate::atacpanel::have_panels();
     let s = sample_reads(eff_r1, eff_r2, n, want_full)?;
@@ -126,9 +120,8 @@ pub fn detect(
     Ok(build_report(analysis, swapped, n, s.early_stop, end, atac))
 }
 
-/// Distinct whitelist filenames relevant to the pair's observed R1 geometry.
-/// The wasm front-end calls this to fetch only the matching onlist before
-/// `detect`, instead of pulling every catalogued whitelist.
+/// Distinct whitelist filenames matching the pair's R1 geometry; the wasm front-end
+/// fetches only these instead of every catalogued whitelist.
 pub fn candidate_whitelist_files(r1: &Path, r2: &Path, n: usize) -> Result<Vec<&'static str>> {
     let (eff_r1, _, _) = orient(r1, r2)?;
     let (sample, _) = fastq::sample(eff_r1, n.min(2_000))?;
@@ -144,12 +137,13 @@ pub fn candidate_whitelist_files(r1: &Path, r2: &Path, n: usize) -> Result<Vec<&
     Ok(files)
 }
 
-/// Quick-sample both inputs to decide which file carries the barcode read. If R1
-/// looks long and R2 looks like a barcode read, treat them as swapped. Returns the
-/// effective (r1, r2) ordering and whether a swap was applied.
+/// Effective (r1, r2) ordering, plus whether a swap was applied: a long R1 with a
+/// barcode-length R2 means the mates were handed over the wrong way round.
 fn orient<'a>(r1: &'a Path, r2: &'a Path) -> Result<(&'a Path, &'a Path, bool)> {
-    let (a_quick, b_quick) =
-        fastq::par_pair(|| fastq::sample_seqs(r1, 1_000), || fastq::sample_seqs(r2, 1_000))?;
+    let (a_quick, b_quick) = fastq::par_pair(
+        || fastq::sample_seqs(r1, 1_000),
+        || fastq::sample_seqs(r2, 1_000),
+    )?;
     let swapped =
         !fits_barcode_len(dominant_len(&a_quick)) && fits_barcode_len(dominant_len(&b_quick));
     Ok(if swapped {
@@ -159,8 +153,7 @@ fn orient<'a>(r1: &'a Path, r2: &'a Path) -> Result<(&'a Path, &'a Path, bool)> 
     })
 }
 
-/// Sampled reads plus how sampling ended: the running TSO count (SPRT path only)
-/// and whether SPRT stopped early because the TSO signal was already decisive.
+/// Sampled reads plus how sampling ended; the TSO count is set on the SPRT path only.
 struct Sampled {
     r1: Vec<Vec<u8>>,
     r2: Vec<Vec<u8>>,
@@ -168,9 +161,8 @@ struct Sampled {
     early_stop: bool,
 }
 
-/// Sample up to `n` read pairs. With a whitelist cache, collect the full `n` (the CB
-/// set must be large to score overlap); without one, SPRT stops as soon as the TSO
-/// signal is decisive.
+/// Sample up to n read pairs; without a whitelist cache, SPRT stops as soon as the
+/// TSO signal is decisive.
 fn sample_reads(eff_r1: &Path, eff_r2: &Path, n: usize, have_cache: bool) -> Result<Sampled> {
     if have_cache {
         let mut r1 = Vec::with_capacity(n);
@@ -212,8 +204,8 @@ fn sample_reads(eff_r1: &Path, eff_r2: &Path, n: usize, have_cache: bool) -> Res
     }
 }
 
-/// Load the whitelist barcode sets needed to score `candidates`, once per unique file.
-/// Files that are absent from the cache are silently skipped (scored as no overlap).
+/// Barcode sets for the candidates' whitelists; files absent from the cache are
+/// skipped and score as no overlap.
 fn load_candidate_whitelists(
     cache: &Path,
     candidates: &[&'static AssaySpec],

@@ -1,18 +1,10 @@
-//! Generic, seqspec-driven assay detection.
+//! Generic, seqspec-driven assay detection; the counterpart to chemistry.rs, which is
+//! hand-tuned for the 10x family + Drop-seq.
 //!
-//! Unlike `chemistry.rs` (hand-tuned for the 10x family + Drop-seq), this scores
-//! *any* assay describable in seqspec by combining two read-derived signals against
-//! each catalogued assay's structural read:
-//!
-//! 1. **Geometry** — does the observed barcode-read length match the assay's
-//!    expected structural length?
-//! 2. **Linker anchors** — do the assay's fixed inter-barcode linker/adapter
-//!    sequences appear at their expected offsets? This generalizes the 10x TSO
-//!    anchor and is what makes combinatorial assays (SPLiT-seq, inDrop, PIP-seq,
-//!    sci-RNA-seq, SHARE-seq) detectable *without* a barcode whitelist.
-//!
-//! Both signals are log-likelihood ratios (nats), summed and ranked, mirroring the
-//! model in `chemistry.rs`.
+//! Every catalogued assay's structural read is scored on two summed log-likelihood
+//! ratios (nats): barcode-read geometry, and fixed linker anchors. The anchor signal is
+//! what makes combinatorial assays (SPLiT-seq, inDrop, PIP-seq, sci-RNA-seq) detectable
+//! without a barcode whitelist.
 
 use std::path::Path;
 
@@ -24,9 +16,8 @@ use crate::fastq;
 use crate::libstruct::{embedded_assays, Assay, Segment};
 use crate::stats::{bernoulli_llr, dominant_len};
 
-// Anchor model: a real fixed linker is present in ~80% of eligible reads (allowing
-// for sequencing error); a 6+ bp exact-ish motif at a fixed offset has a tiny
-// chance rate. Same shape as the TSO model in chemistry.rs.
+// Anchor model, same shape as the TSO model in chemistry.rs: a real linker survives
+// sequencing error in ~80% of reads, a 6+ bp motif at a fixed offset hits by chance ~0.1%.
 const ANCHOR_P_SIGNAL: f64 = 0.80;
 const ANCHOR_P_NULL: f64 = 0.001;
 const GEOM_BONUS: f64 = 10.0;
@@ -54,8 +45,7 @@ pub struct AssayHit {
     pub score: f64,
     /// UMI-based (digital counts) vs plate-based / full-length (no UMI, read counts).
     pub umi_based: bool,
-    /// Per-barcode onlist overlap `(cache_name, hit_rate)`, empty when no onlist was
-    /// loaded for this assay. Populated only when a barcode whitelist is cached.
+    /// Per-barcode onlist overlap (cache_name, hit_rate); empty unless a whitelist is cached.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub onlist_overlap: Vec<(String, f64)>,
 }
@@ -162,9 +152,8 @@ pub fn find_assay(query: &str) -> Option<Assay> {
         .cloned()
 }
 
-/// Human-friendly display name for a catalogued assay, from its spec filename — with the
-/// 3'/5' orientation kept where it applies (e.g. `10x_rna_v3` → "10x 3' v3"). Falls back to
-/// a dash-cased stem for anything not in the curated table.
+/// Display name from the spec filename, keeping 3'/5' orientation (10x_rna_v3 gives "10x 3' v3").
+/// Stems outside the curated table fall back to dash-casing.
 pub fn pretty_name(spec_file: &str) -> String {
     let stem = spec_file.trim_end_matches(".spec.yaml");
     let known = match stem {
@@ -260,8 +249,7 @@ fn hamming_le(a: &[u8], b: &[u8], max_mismatch: usize) -> bool {
     true
 }
 
-/// Score one observed read set against a structural layout. Returns
-/// `(total_llr, anchors_found, dominant_len)`.
+/// Score one observed read set against a structural layout: (total_llr, anchors_found, dominant_len).
 fn score_obs(obs: &[Vec<u8>], expected_len: usize, anchors: &[Anchor]) -> (f64, usize, usize) {
     if obs.is_empty() {
         return (f64::NEG_INFINITY, 0, 0);
@@ -270,8 +258,7 @@ fn score_obs(obs: &[Vec<u8>], expected_len: usize, anchors: &[Anchor]) -> (f64, 
     let tol = (expected_len / 15).max(3);
     let diff = dominant.abs_diff(expected_len);
     let geometry_ok = expected_len > 0 && diff <= tol;
-    // Graded: an exact length match scores the full bonus; each bp of deviation
-    // within tolerance shaves it down, so the closest-fitting assay ranks highest.
+    // graded, not pass/fail: each bp of deviation shaves the bonus, so the closest geometry wins
     let mut total = if geometry_ok {
         GEOM_BONUS - diff as f64
     } else {
@@ -302,8 +289,8 @@ fn score_obs(obs: &[Vec<u8>], expected_len: usize, anchors: &[Anchor]) -> (f64, 
     (total, found, dominant)
 }
 
-// Real barcodes land in the onlist ~70% of the time (error + ambient), wrong ones at
-// chance. Same model as the whitelist signal in chemistry.rs.
+// Real barcodes land in the onlist ~70% of the time (error + ambient); same model as the
+// whitelist signal in chemistry.rs.
 const P_ONLIST_CORRECT: f64 = 0.70;
 const P_ONLIST_NULL: f64 = 0.01;
 
@@ -311,11 +298,10 @@ const P_ONLIST_NULL: f64 = 0.01;
 #[derive(Debug, Clone)]
 pub struct OnlistSeg {
     pub offset: usize,
-    /// `len..=max_len` give the lengths matched against the onlist; for a variable
-    /// barcode (inDrop bc1, 8-11 bp) they differ.
+    /// Lengths matched against the onlist; they differ for a variable barcode (inDrop bc1, 8-11 bp).
     pub len: usize,
     pub max_len: usize,
-    /// Cache name of the resolved onlist, the key into the loaded `sets` map.
+    /// Cache name of the resolved onlist; the key into the loaded sets map.
     pub filename: String,
 }
 
@@ -327,10 +313,8 @@ pub struct OnlistSource {
     pub url: &'static str,
 }
 
-/// Onlist sources keyed by `(spec_file, onlist_filename_in_spec)`. seqspec carries no
-/// fetch URLs and its onlist filenames collide across assays, so each non-10x barcode
-/// list is mapped here to a hosted copy on the scg_lib_structs mirror. Assays not in
-/// this table stay geometry-only.
+/// Onlist sources keyed by (spec_file, onlist_filename_in_spec): seqspec carries no fetch URLs
+/// and its onlist filenames collide across assays. Assays absent here stay geometry-only.
 const ONLIST_SOURCES: &[(&str, &str, OnlistSource)] = &[
     (
         "indropv2.spec.yaml",
@@ -340,8 +324,7 @@ const ONLIST_SOURCES: &[(&str, &str, OnlistSource)] = &[
             url: "https://teichlab.github.io/scg_lib_structs/data/inDrop/inDrop_barcode1_list.txt",
         },
     ),
-    // inDrop bc2 is dropped by the framing rule (downstream of variable bc1), so it is
-    // intentionally not listed here — it would only be fetched and never scored.
+    // inDrop bc2 is omitted deliberately: the framing rule drops it (downstream of variable bc1).
     (
         "bd_rhapsody_v1.spec.yaml",
         "cls1_onlist.txt",
@@ -432,8 +415,7 @@ const ONLIST_SOURCES: &[(&str, &str, OnlistSource)] = &[
     ),
 ];
 
-/// Resolve a spec-local onlist filename to a fetchable source, or `None` if preflightx
-/// has no hosted copy for it (the assay stays geometry-only).
+/// Resolve a spec-local onlist filename to a fetchable source; None leaves the assay geometry-only.
 fn onlist_source(spec_file: &str, onlist_filename: &str) -> Option<OnlistSource> {
     ONLIST_SOURCES
         .iter()
@@ -451,8 +433,7 @@ pub fn onlist_fetch_list() -> Vec<OnlistSource> {
         .collect()
 }
 
-/// Load every cached onlist (keyed by cache name) so it can be scored. Files absent
-/// from the cache are skipped, leaving those assays geometry-only.
+/// Load every cached onlist, keyed by cache name; uncached files leave their assay geometry-only.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_cached_onlists() -> std::collections::HashMap<String, std::collections::HashSet<Vec<u8>>> {
     let mut sets = std::collections::HashMap::new();
@@ -472,7 +453,7 @@ fn load_cached_onlists() -> std::collections::HashMap<String, std::collections::
 fn load_cached_onlists() -> std::collections::HashMap<String, std::collections::HashSet<Vec<u8>>> {
     let mut sets = std::collections::HashMap::new();
     for src in onlist_fetch_list() {
-        // Key must match where `wasm::load_whitelist` stashes onlists.
+        // key must match where wasm::load_whitelist stashes onlists
         let key = format!("{}/{}", crate::wasm::WL_DIR, src.cache_name);
         if let Some(bytes) = fastq::vfs::get(&key) {
             if let Ok(text) = std::str::from_utf8(bytes.as_ref()) {
@@ -483,8 +464,7 @@ fn load_cached_onlists() -> std::collections::HashMap<String, std::collections::
     sets
 }
 
-/// One barcode per line (first whitespace/comma field), uppercased. Handles `.txt`
-/// and `.tsv`/`.csv` onlists; blank and comment lines are skipped.
+/// One barcode per line (first tab/comma field), uppercased; blank and comment lines skipped.
 fn parse_onlist(text: &str) -> std::collections::HashSet<Vec<u8>> {
     text.lines()
         .map(str::trim)
@@ -528,10 +508,9 @@ fn revcomp_upper_into(seq: &[u8], out: &mut Vec<u8>) {
     }
 }
 
-/// Summed onlist-overlap LLR (nats) plus a per-segment `(filename, hit_rate)`. Each
-/// barcode is matched forward and reverse-complemented (sequencer-dependent), and at
-/// every length for variable-length barcodes; the better orientation is scored.
-/// Segments whose onlist is not loaded contribute nothing.
+/// Summed onlist-overlap LLR (nats) plus per-segment (filename, hit_rate); unloaded onlists
+/// contribute nothing. Barcodes are matched in both orientations (sequencer-dependent) and the
+/// better one scored.
 fn onlist_overlap_llr(
     obs: &[Vec<u8>],
     segs: &[OnlistSeg],

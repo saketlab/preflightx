@@ -148,8 +148,9 @@ mod detect {
         if cat.is_empty() {
             return no_catalogue(declared);
         }
-        let (counts, scanned, reads_with_hit) =
-            count_hits(reads, cat.k(), cat.len(), |key| cat.autosomal_hit_encoded(key));
+        let (counts, scanned, reads_with_hit) = count_hits(reads, cat.k(), cat.len(), |key| {
+            cat.autosomal_hit_encoded(key)
+        });
         let (top_idx, top_c, runner_up, runner_c) =
             rank(&counts, |i| cat.species_of(i).to_string());
 
@@ -266,7 +267,9 @@ mod detect {
             return exon;
         }
         let (counts, scanned, reads_with_hit) =
-            count_hits(reads, intron.k(), intron.len(), |key| intron.hit_encoded(key));
+            count_hits(reads, intron.k(), intron.len(), |key| {
+                intron.hit_encoded(key)
+            });
         let (top_idx, top_c, runner_up, runner_c) =
             rank(&counts, |i| intron.species_of(i).to_string());
         if !sn_decisive(top_c, runner_c) {
@@ -633,8 +636,10 @@ mod tests {
 
     fn multiome_species(srr: &str, tail: &str) -> SpeciesReport {
         let cat = crate::speciespanel::Catalogue::load().unwrap();
-        let base =
-            format!("https://ftp.sra.ebi.ac.uk/vol1/fastq/{}/{tail}/{srr}/{srr}", &srr[..6]);
+        let base = format!(
+            "https://ftp.sra.ebi.ac.uk/vol1/fastq/{}/{tail}/{srr}/{srr}",
+            &srr[..6]
+        );
         let (r1, r2) = (format!("{base}_1.fastq.gz"), format!("{base}_2.fastq.gz"));
         let introns = crate::snpanel::IntronCatalogue::load_or_empty();
         detect_species_auto(

@@ -1,14 +1,12 @@
-//! seqspec ingestion: parse a seqspec YAML into a library structure and resolve
-//! each sequencing read into an ordered list of segments (barcode / UMI / cDNA /
-//! linker / ...). This is the generic substrate the detector scores against, so
-//! any assay describable in seqspec can be reasoned about without a hand-coded
-//! `AssaySpec`. See `docs/seqspec-support-plan.md`.
+//! seqspec ingestion: parse a seqspec YAML and resolve each read into ordered
+//! segments (barcode / UMI / cDNA / linker). The generic substrate the detector
+//! scores against, so any seqspec-describable assay needs no hand-coded AssaySpec.
+//! See docs/seqspec-support-plan.md.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-/// A barcode/onlist reference inside a region. Only the identity fields matter to
-/// preflightx; the actual list is fetched on demand, never bundled.
+/// A barcode/onlist reference inside a region; the list itself is fetched on demand, never bundled.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Onlist {
     #[serde(default)]
@@ -19,7 +17,7 @@ pub struct Onlist {
     pub url: String,
 }
 
-/// One node in the seqspec `library_spec` region tree.
+/// One node in the seqspec library_spec region tree.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Region {
     pub region_id: String,
@@ -44,12 +42,8 @@ impl Region {
     }
 }
 
-/// seqspec's `region_type` is free text, so the same concept appears under many names.
-/// These normalize the in-read **cell/well-identifying barcode** synonyms and the UMI
-/// synonyms seen across the catalogue, so geometry extraction isn't limited to specs
-/// that happen to use the literal `barcode`/`umi` strings. Sample/lane sequencing
-/// indices (`index7`, `i7`, `sample_index`, …) are deliberately **excluded** — they
-/// identify the library, not the cell, and live on separate index reads.
+/// Cell/well barcode synonyms; seqspec region_type is free text.
+/// Sample/lane indices (index7, i7, sample_index) are excluded: they identify the library, not the cell.
 fn is_barcode_type(region_type: &str) -> bool {
     matches!(
         region_type.to_ascii_lowercase().as_str(),
@@ -74,33 +68,29 @@ fn is_umi_type(region_type: &str) -> bool {
     region_type.eq_ignore_ascii_case("umi")
 }
 
-/// A barcode or UMI region (the first one marks the start of the observed read).
+/// A barcode or UMI region; the first one marks the start of the observed read.
 pub fn is_barcode_or_umi(region_type: &str) -> bool {
     is_barcode_type(region_type) || is_umi_type(region_type)
 }
 
-/// Fixed inter-barcode sequences (and short variable spacers) that are *sequenced*
-/// as part of the barcode read — they don't terminate it the way the cDNA insert does.
+/// Inter-barcode sequences and short spacers; sequenced as part of the barcode read, so they do not terminate it.
 fn is_linker_type(region_type: &str) -> bool {
     let rt = region_type.to_ascii_lowercase();
     rt.starts_with("link") || rt.starts_with("spacer")
 }
 
-/// The biological insert (cDNA/gDNA/transcript/poly tail) that the barcode read runs
-/// into. Some specs write these as fixed-length regions, so type — not just
-/// variable-length — must be recognized.
+/// The biological insert the barcode read runs into; matched by type, since some specs give it a fixed length.
 fn is_insert_type(region_type: &str) -> bool {
     let rt = region_type.to_ascii_lowercase();
     matches!(
         rt.as_str(),
         "cdna" | "gdna" | "rna" | "dna" | "insert" | "hic" | "methyl" | "atac" | "protein"
-    ) || rt.starts_with("poly") // poly_T / polyA / ploy_t (typo'd in some specs)
+    ) || rt.starts_with("poly") // ploy_t: typo'd upstream in some specs
         || rt.starts_with("ploy")
 }
 
-/// A region that absorbs the rest of the read (the biological insert): an insert-type
-/// region, or any *variable* region that is not a barcode, UMI, or linker. This — not
-/// "any variable region" — is what terminates a read's structural layout.
+/// A region that absorbs the rest of the read: insert-type, or variable and not a barcode/UMI/linker.
+/// Terminating on "any variable region" would truncate variable-length barcodes and spacers.
 fn is_read_terminator(s: &Segment) -> bool {
     is_insert_type(&s.region_type)
         || (s.max_len > s.len
@@ -109,7 +99,7 @@ fn is_read_terminator(s: &Segment) -> bool {
             && !is_linker_type(&s.region_type))
 }
 
-/// One sequencing read in the seqspec `sequence_spec`.
+/// One sequencing read in the seqspec sequence_spec.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Read {
     pub read_id: String,
@@ -128,19 +118,16 @@ pub struct Read {
 pub struct Assay {
     #[serde(default)]
     pub assay_id: String,
-    /// Source spec filename (e.g. `split_seq.spec.yaml`); the stable catalogue key,
-    /// since `assay_id` is frequently empty in upstream specs. Set by `embedded_assays`.
+    /// Source spec filename; the stable catalogue key, since assay_id is frequently empty upstream.
     #[serde(default)]
     pub spec_file: String,
     #[serde(default)]
     pub name: String,
-    /// Publication DOI for the assay/protocol (often a `https://doi.org/...` URL;
-    /// frequently empty upstream). Consumed by the doc generator to hyperlink each assay.
+    /// Publication DOI, often empty upstream; used by the doc generator.
     #[serde(default)]
     #[allow(dead_code)]
     pub doi: String,
-    /// Free-text publication date (formats vary upstream, e.g. `19 October 2018`,
-    /// `2016-08-01`; often empty). Used by the doc generator for a year badge.
+    /// Free-text publication date; formats vary upstream and it is often empty.
     #[serde(default)]
     #[allow(dead_code)]
     pub date: String,
@@ -160,10 +147,10 @@ pub struct Segment {
     pub region_id: String,
     pub region_type: String,
     pub sequence_type: String,
-    /// Expected length in this read (min_len of the region).
+    /// Expected length in this read (region min_len).
     pub len: usize,
     pub max_len: usize,
-    /// Fixed sequence (oriented for this read's strand) for linker/adapter anchors.
+    /// Fixed sequence, oriented for this read's strand; the linker/adapter anchor.
     pub sequence: Option<String>,
     pub onlist: Option<Onlist>,
 }
@@ -189,32 +176,25 @@ impl Assay {
         out
     }
 
-    /// Whether the assay design captures a UMI anywhere in the library. True for
-    /// droplet/well UMI assays (10x, Drop-seq, MARS-seq) → digital (de-duplicated)
-    /// counts; false for full-length plate-based protocols (Smart-seq2/3) that have no
-    /// UMI and quantify by read counts.
+    /// Whether the assay captures a UMI anywhere; false for full-length plate protocols
+    /// (Smart-seq2/3), which quantify by read counts rather than deduplicated counts.
     pub fn has_umi(&self) -> bool {
         self.leaf_regions()
             .iter()
             .any(|r| is_umi_type(&r.region_type))
     }
 
-    /// Resolve a read (by `read_id`) into the ordered segments it covers.
+    /// Resolve a read into the ordered segments it covers.
     ///
-    /// A read primes from its `primer_id` region. A `pos`-strand read then covers
-    /// the regions that follow the primer, in order; a `neg`-strand read covers the
-    /// regions that precede the primer, in reverse (it sequences the other strand).
-    /// We walk outward accumulating region `min_len` until the read's `max_len` is
-    /// consumed, yielding the ordered barcode/UMI/cDNA/linker segments.
+    /// Mirrors seqspec's map_read_id_to_regions: a pos read covers the regions after its
+    /// primer; a neg read covers those before it, reversed and revcomp'd.
     pub fn read_layout(&self, read_id: &str) -> Option<Vec<Segment>> {
         let read = self.sequence_spec.iter().find(|r| r.read_id == read_id)?;
         let leaves = self.leaf_regions();
         let neg = read.strand == "neg";
 
-        // The read covers the regions downstream of its primer in the strand direction.
-        // A `generic_primer1`/`generic_primer2` (or any primer_id not present as a
-        // region) is a placeholder for the molecule boundary: the read starts at the
-        // 5' end (pos) or the 3' end (neg) and covers the whole molecule from there.
+        // A primer_id with no matching region (generic_primer1/2) means the molecule
+        // boundary: read from the 5' end (pos) or the 3' end (neg).
         let ordered: Vec<&Region> = match leaves.iter().position(|r| r.region_id == read.primer_id)
         {
             Some(primer_idx) if neg => leaves[..primer_idx].iter().rev().copied().collect(),

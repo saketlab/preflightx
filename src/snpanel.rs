@@ -116,9 +116,18 @@ mod tests {
         ]);
         assert_eq!(cat.len(), 2);
         assert_eq!(cat.k(), 10);
-        assert_eq!(cat.species_of(cat.hit(b"AAAAAAAAAA").unwrap()), "Felis_catus");
-        assert_eq!(cat.species_of(cat.hit(b"TTTTTTTTTT").unwrap()), "Felis_catus"); // revcomp
-        assert_eq!(cat.species_of(cat.hit(b"GGGAGGGAGG").unwrap()), "Bos_taurus");
+        assert_eq!(
+            cat.species_of(cat.hit(b"AAAAAAAAAA").unwrap()),
+            "Felis_catus"
+        );
+        assert_eq!(
+            cat.species_of(cat.hit(b"TTTTTTTTTT").unwrap()),
+            "Felis_catus"
+        ); // revcomp
+        assert_eq!(
+            cat.species_of(cat.hit(b"GGGAGGGAGG").unwrap()),
+            "Bos_taurus"
+        );
         assert!(cat.hit(b"ACACACACAC").is_none());
     }
 }

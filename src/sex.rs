@@ -544,13 +544,28 @@ mod tests {
     #[test]
     fn is_weak_covers_subthreshold_unknown_not_zerohit() {
         let panel = for_species("human").unwrap();
-        let mk = |y, x| analyze(panel, "human", &Tally {
-            scanned: 200_000, too_short: 0, y_hit_reads: y, xist_hit_reads: x,
-            gene_reads: vec![0; panel.genes.len()],
-        });
+        let mk = |y, x| {
+            analyze(
+                panel,
+                "human",
+                &Tally {
+                    scanned: 200_000,
+                    too_short: 0,
+                    y_hit_reads: y,
+                    xist_hit_reads: x,
+                    gene_reads: vec![0; panel.genes.len()],
+                },
+            )
+        };
         // partial evidence under the floor -> weak (depth-limited, deepen it)
-        assert!(mk(5, 0).is_weak(), "sub-threshold unknown y=5 should be weak");
-        assert!(mk(3, 2).is_weak(), "sub-threshold unknown total=5 should be weak");
+        assert!(
+            mk(5, 0).is_weak(),
+            "sub-threshold unknown y=5 should be weak"
+        );
+        assert!(
+            mk(3, 2).is_weak(),
+            "sub-threshold unknown total=5 should be weak"
+        );
         // no evidence at all -> NOT weak (species mismatch; more reads won't help)
         assert!(!mk(0, 0).is_weak(), "zero-hit unknown must not be weak");
         // a confident call is not weak

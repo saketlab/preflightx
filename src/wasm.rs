@@ -1,16 +1,8 @@
-//! Browser entry points (wasm-bindgen).
+//! Browser entry points (wasm-bindgen). Uploaded bytes go into [`fastq::vfs`]; the analysis
+//! functions run unmodified against a synthetic path.
 //!
-//! Each function mirrors a CLI subcommand: it loads the uploaded FASTQ bytes
-//! into the in-memory [`fastq::vfs`], invokes the *unchanged* `&Path`-based
-//! analysis function with a synthetic path, and returns the report as a JSON
-//! string (the same shape the CLI emits under `--json`). Errors surface as a
-//! JS exception carrying the anyhow message.
-//!
-//! 10x whitelist disambiguation works when the host serves the onlists: the
-//! front-end calls [`needed_whitelists`] to learn which file matches the read
-//! geometry, fetches it, hands the bytes to [`load_whitelist`], then calls
-//! [`check`]. Without those files chemistry falls back to geometry + TSO and
-//! confidence is capped at `medium`.
+//! No whitelist cache here. The front-end calls [`needed_whitelists`], fetches each, and
+//! stashes it via [`load_whitelist`]; without them chemistry caps at medium confidence.
 
 use std::path::Path;
 use wasm_bindgen::prelude::*;
@@ -44,8 +36,7 @@ fn wl_cache() -> Option<&'static Path> {
     }
 }
 
-/// Stash R1/R2 in the vfs, run `f` against the synthetic paths, then drop the read
-/// buffers (loaded onlists persist across runs).
+/// Drops the read buffers after `f`; loaded onlists survive.
 fn with_pair<T>(r1: Vec<u8>, r2: Vec<u8>, f: impl FnOnce() -> T) -> T {
     fastq::vfs::put(R1, r1);
     fastq::vfs::put(R2, r2);
@@ -55,8 +46,8 @@ fn with_pair<T>(r1: Vec<u8>, r2: Vec<u8>, f: impl FnOnce() -> T) -> T {
     out
 }
 
-/// Whitelist filenames matching the pair's R1 geometry, as a JSON array. The
-/// front-end fetches each and passes it back through [`load_whitelist`].
+/// Whitelist filenames matching the pair's R1 geometry. The front-end fetches each and
+/// passes it back through [`load_whitelist`].
 #[wasm_bindgen]
 pub fn needed_whitelists(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, JsValue> {
     let files = with_pair(r1, r2, || {
@@ -65,31 +56,27 @@ pub fn needed_whitelists(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<Str
     to_js(&files.map_err(err_to_js)?)
 }
 
-/// Stash a fetched onlist (raw `.txt.gz` or plain bytes) for later [`check`]s.
-/// Cached across runs so it is fetched once per session.
+/// Stash a fetched onlist (`.txt.gz` or plain). Cached across runs, so fetched once.
 #[wasm_bindgen]
 pub fn load_whitelist(name: &str, bytes: Vec<u8>) {
     fastq::vfs::put(&format!("{WL_DIR}/{name}"), bytes);
 }
 
-/// Inject a k-mer panel (`.endpanel` or `.nucpanel` text) so the sc-vs-sn and 3'/5'
-/// verdicts work in the browser (there is no panel cache dir on wasm). `kind` is the
-/// extension: "endpanel" or "nucpanel". Call once per panel at page load, before any
-/// [`check`]. Bytes may be plain text.
+/// Inject a k-mer panel; no panel cache dir exists on wasm, so without this the sc-vs-sn
+/// and 3'/5' verdicts stay `None`. `kind` is "endpanel" or "nucpanel". Call before [`check`].
 #[wasm_bindgen]
 pub fn load_panel(kind: &str, bytes: Vec<u8>) {
     crate::kmerpanel::store_panel(kind, String::from_utf8_lossy(&bytes).into_owned());
 }
 
-/// Onlists `detect_assay` can score, as JSON `[{cache_name, url}]`. The front-end
-/// fetches each `url` and stashes it via [`load_whitelist`] under `cache_name`.
+/// Onlists `detect_assay` can score. The front-end fetches each `url` and stashes it via
+/// [`load_whitelist`] under `cache_name`.
 #[wasm_bindgen]
 pub fn onlist_sources() -> Result<String, JsValue> {
     to_js(&assaydetect::onlist_fetch_list())
 }
 
-/// Stash R1 always and R2 only when non-empty (single-end input), run `f` with a
-/// flag for whether R2 is present, then drop the read buffers.
+/// Empty `r2` means single-end; `f` gets a flag for whether R2 is present.
 fn with_reads<T>(r1: Vec<u8>, r2: Vec<u8>, f: impl FnOnce(bool) -> T) -> T {
     fastq::vfs::put(R1, r1);
     let has_r2 = !r2.is_empty();
@@ -104,8 +91,8 @@ fn with_reads<T>(r1: Vec<u8>, r2: Vec<u8>, f: impl FnOnce(bool) -> T) -> T {
     out
 }
 
-/// Full report for an R1/R2 pair, or for a single read when `r2` is empty.
-/// `r1`/`r2` are the raw uploaded file bytes (gzip is auto-detected).
+/// Full report. `r1`/`r2` are raw uploaded bytes (gzip auto-detected); empty `r2` is
+/// single-end.
 #[wasm_bindgen]
 pub fn check(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, JsValue> {
     with_reads(r1, r2, |has_r2| {
@@ -117,15 +104,14 @@ pub fn check(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, JsValue
     })
 }
 
-/// Single-end / bulk: no R2, so chemistry and assay detection (which need the pair)
-/// are skipped; the one read is the cDNA, so composition reads it directly.
+/// Chemistry and assay detection need both mates, so they are skipped here.
 fn run_check_single(n: usize) -> Result<String, JsValue> {
     let r1 = Path::new(R1);
     let bulk = size::bulk_or_sc(r1, n).map_err(err_to_js)?;
     let sz = size::size_sanity(r1, None, n).map_err(err_to_js)?;
     let comp = composition::composition(r1, n).map_err(err_to_js)?;
-    // Single-end: the one read is cDNA, so the panels can still classify.
     let (nucleus, end) = report::panel_verdicts(r1, None, n, None);
+    let classification = report::Classification::derive(&None, &bulk, &nucleus);
     let full = report::FullReport {
         r1: R1.to_string(),
         r2: None,
@@ -138,6 +124,7 @@ fn run_check_single(n: usize) -> Result<String, JsValue> {
         sex: None,
         nucleus,
         end,
+        classification,
     };
     to_js(&full)
 }
@@ -151,13 +138,13 @@ fn run_check(n: usize) -> Result<String, JsValue> {
     let sz = size::size_sanity(r1, Some(r2), n).map_err(err_to_js)?;
     let cdna = fastq::longer_read(r1, r2, 256).map_err(err_to_js)?;
     let comp = composition::composition(cdna, n).map_err(err_to_js)?;
-    // sc-vs-sn + 3'/5' from the injected nucleus/end panels (each None until the
-    // front-end has called `load_panel`; samples cDNA only if a panel is loaded).
     let (nucleus, end) = report::panel_verdicts(r1, Some(r2), n, None);
+    let chemistry = Some(chem);
+    let classification = report::Classification::derive(&chemistry, &bulk, &nucleus);
     let full = report::FullReport {
         r1: R1.to_string(),
         r2: Some(R2.to_string()),
-        chemistry: Some(chem),
+        chemistry,
         assay_detection,
         bulk_vs_sc: bulk,
         size: sz,
@@ -166,6 +153,7 @@ fn run_check(n: usize) -> Result<String, JsValue> {
         sex: None,
         nucleus,
         end,
+        classification,
     };
     to_js(&full)
 }
@@ -183,14 +171,14 @@ pub fn detect_assay(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, 
 #[wasm_bindgen]
 pub fn chem(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, JsValue> {
     let result = with_pair(r1, r2, || {
-        chemistry::detect(Path::new(R1), Path::new(R2), n_reads, wl_cache(), None).map_err(err_to_js)
+        chemistry::detect(Path::new(R1), Path::new(R2), n_reads, wl_cache(), None)
+            .map_err(err_to_js)
     });
     to_js(&result?)
 }
 
-/// The species with a bundled sex panel, as `[{species, status, mechanism}]`.
-/// The front-end builds the species selector from this rather than a hardcoded
-/// list; a non-`XY_XIST` `mechanism` is not yet callable by the decision rule.
+/// Species with a bundled sex panel; backs the front-end's selector. A non-XY_XIST
+/// mechanism is not callable yet.
 #[wasm_bindgen]
 pub fn sex_species() -> Result<String, JsValue> {
     let panels: Vec<serde_json::Value> = sexpanel::species_list()
@@ -207,11 +195,8 @@ pub fn sex_species() -> Result<String, JsValue> {
     to_js(&panels)
 }
 
-/// Genetic-sex inference (Y-gene + XIST k-mers, alignment-free). Kept out of
-/// [`check`] so the front-end runs it only on request. cDNA reads are auto-selected
-/// (the cDNA read for single-cell, both mates for paired-end bulk, the lone read when
-/// `r2` is empty); `sex_reads` is sampled deeper than the other checks because Y/XIST
-/// are sparse (native default 200000).
+/// Genetic-sex inference (Y-gene + XIST k-mers). Separate from [`check`] so the front-end
+/// runs it on request. Y/XIST are sparse, so `sex_reads` samples deeper (native 200000).
 #[wasm_bindgen]
 pub fn sex(r1: Vec<u8>, r2: Vec<u8>, species: &str, sex_reads: usize) -> Result<String, JsValue> {
     let result = with_reads(r1, r2, |has_r2| {
@@ -221,12 +206,8 @@ pub fn sex(r1: Vec<u8>, r2: Vec<u8>, species: &str, sex_reads: usize) -> Result<
     to_js(&result?)
 }
 
-/// Genetic-sex inference against a panel supplied as `.spanel` text, fetched by the
-/// front-end from the hosted panel mirror (see `web/data/panels.json`). This lifts
-/// the browser beyond the two embedded human/mouse panels to *any* catalogued
-/// species, so the page can auto-pick the panel from the detected organism with no
-/// user selection. Empty/unparseable `spanel_text`, or a species with no Y/XIST
-/// pool, yields a clean "unavailable" no-call.
+/// Sex against a front-end-supplied .spanel (see web/data/panels.json), which reaches any
+/// catalogued species, not just the two embedded ones. Unusable panel gives a no-call.
 #[wasm_bindgen]
 pub fn sex_with_panel(
     r1: Vec<u8>,
@@ -245,8 +226,7 @@ pub fn sex_with_panel(
     to_js(&result?)
 }
 
-/// Render an HTML report from a report object or array, via the same renderer as
-/// the CLI's `check --html`.
+/// Same renderer as the CLI's `check --html`.
 #[wasm_bindgen]
 pub fn report_html_json(json: &str) -> Result<String, JsValue> {
     let v: serde_json::Value =

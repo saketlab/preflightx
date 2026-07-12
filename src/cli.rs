@@ -1,6 +1,5 @@
-//! Native command-line front-end. Each subcommand calls one analysis-module
-//! function, then branches on `--json`. Kept out of the wasm build (clap +
-//! whitelist I/O are native-only).
+//! Native command-line front-end; one analysis-module call per subcommand, then a branch
+//! on `--json`. Not built for wasm (clap and whitelist I/O are native-only).
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -39,8 +38,7 @@ fn print_dir(json: bool, key: &str, dir: &Path) {
     }
 }
 
-/// Accept `r1,r2` as a single comma-separated positional, or `r1 r2` as two.
-/// A lone arg with no comma is single-end (R2 = None).
+/// Accepts `r1,r2` as one positional or `r1 r2` as two; no comma means single-end.
 fn split_pair(r1: String, r2: Option<String>) -> (PathBuf, Option<PathBuf>) {
     match r2 {
         Some(r2) => (r1.into(), Some(r2.into())),
@@ -51,9 +49,8 @@ fn split_pair(r1: String, r2: Option<String>) -> (PathBuf, Option<PathBuf>) {
     }
 }
 
-/// Species + sex from one cDNA read pass (resampled at 2x if either is weak).
-/// Shared by `check` and `detect-all`. Degrades to no-species/`--species`-default
-/// sex when no panels are cached.
+/// Species + sex from one cDNA pass, resampled at 2x if either comes back weak.
+/// With no cached panels: no species call, and sex falls back to `--species`.
 fn species_and_sex(
     r1: &Path,
     r2: Option<&Path>,
@@ -68,14 +65,12 @@ fn species_and_sex(
         })?;
         Ok((None, sx))
     } else {
-        // The intron channel rescues single-nucleus species-ID (loaded once; empty if uncached).
+        // single-nucleus reads only get a species call via the intron channel
         let introns = snpanel::IntronCatalogue::load()
             .unwrap_or_else(|_| snpanel::IntronCatalogue::from_texts(&[]));
         let (sp, sx) = deepen_if_weak(
             sex_reads,
-            |(sp, sx): &(species::SpeciesReport, sex::SexReport)| {
-                sp.is_unknown() || sx.is_weak()
-            },
+            |(sp, sx): &(species::SpeciesReport, sex::SexReport)| sp.is_unknown() || sx.is_weak(),
             |n| {
                 let reads = sex::sample_cdna(r1, r2, n)?;
                 let sp = species::detect_species(&reads, &catalogue, declared);
@@ -89,8 +84,7 @@ fn species_and_sex(
     }
 }
 
-/// Species to route the ATAC-vs-RNA panel by: the detected call when confident, else
-/// the declared `--species`.
+/// Species for the ATAC-vs-RNA panel: the detected call, else `--species`.
 fn atac_species_hint<'a>(
     sp: Option<&'a species::SpeciesReport>,
     declared: Option<&'a str>,
@@ -180,8 +174,7 @@ pub fn run() -> Result<()> {
     match cli.cmd {
         Cmd::Check { r1, r2 } => {
             let cache = whitelists::cache_dir()?;
-            // Species first: routes the sex panel and the chemistry ATAC panel to the
-            // called organism; both scan the same cDNA pass.
+            // species first; the sex and ATAC panels key off it
             let (species_rep, sx) =
                 species_and_sex(&r1, r2.as_deref(), cli.species.as_deref(), cli.sex_reads)?;
             let sp_hint = atac_species_hint(species_rep.as_ref(), cli.species.as_deref());
@@ -199,14 +192,13 @@ pub fn run() -> Result<()> {
             };
             let bulk = size::bulk_or_sc(&r1, cli.n_reads)?;
             let sz = size::size_sanity(&r1, r2.as_deref(), cli.n_reads)?;
-            // Composition reads the cDNA (longer read of a pair).
             let cdna_read = match r2.as_deref() {
                 Some(r2p) => fastq::longer_read(&r1, r2p, 256)?,
                 None => &r1,
             };
             let comp = composition::composition(cdna_read, cli.n_reads)?;
-            // sc-vs-sn + 3'/5' (each None if its panel is uncached; samples cDNA only if a panel is loaded).
             let (nucleus, end) = report::panel_verdicts(&r1, r2.as_deref(), cli.n_reads, sp_hint);
+            let classification = report::Classification::derive(&chem, &bulk, &nucleus);
             let r = report::FullReport {
                 r1: r1.display().to_string(),
                 r2: r2.as_ref().map(|p| p.display().to_string()),
@@ -219,6 +211,7 @@ pub fn run() -> Result<()> {
                 sex: Some(sx),
                 nucleus,
                 end,
+                classification,
             };
             if let Some(path) = &cli.html {
                 std::fs::write(path, r.to_html())?;
@@ -232,7 +225,7 @@ pub fn run() -> Result<()> {
         }
         Cmd::DetectAll { r1, r2 } => {
             let (r1, r2) = split_pair(r1, r2);
-            // Species first, so chemistry's ATAC panel can pick the called organism.
+            // species first; the ATAC panel keys off it
             let (species, sex) =
                 species_and_sex(&r1, r2.as_deref(), cli.species.as_deref(), cli.sex_reads)?;
             let sp_hint = atac_species_hint(species.as_ref(), cli.species.as_deref());
@@ -322,7 +315,7 @@ pub fn run() -> Result<()> {
             }
         }
         Cmd::Nucleus { r1, r2 } => {
-            // Nucleus vs cell is a cDNA-read property; sample cDNA as sex/species do.
+            // nucleus vs cell is a cDNA-read property
             let reads = sex::sample_cdna(&r1, r2.as_deref(), cli.n_reads)?;
             let nuc = nucpanel::classify(&reads);
             if cli.json {

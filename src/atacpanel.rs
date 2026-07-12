@@ -1,14 +1,10 @@
-//! ATAC-vs-RNA k-mer panel: an alignment-free read of whether a library is chromatin
-//! accessibility (ATAC) or transcriptomic (RNA).
+//! ATAC-vs-RNA k-mer panel: an alignment-free modality signal folded into chemistry detection.
 //!
-//! Each k-mer is anchored to one of two categories of a ubiquitous gene: `exon` (mature
-//! transcript; RNA reads land here) or `promoter` (genomic sequence around the TSS, open
-//! in ATAC but never transcribed into mRNA). `promoter_frac = n_promoter / (n_promoter +
-//! n_exon)`: RNA cDNA reads are exon-only (frac ~0), ATAC genomic reads also hit accessible
-//! promoters (frac up). Fetched by `fetch-panels` into
-//! [`crate::whitelists::panel_cache_dir`]; no cache -> `unknown`. This is a *modality*
-//! signal folded into chemistry detection, not a standalone verdict.
-//! Built by `experiments/atac_panel/build_atac_panel.py`.
+//! Each k-mer is anchored to a ubiquitous gene's exon (mature transcript; cDNA reads land here)
+//! or promoter (TSS-proximal genomic, open in ATAC but never transcribed), so promoter_frac
+//! separates the two modalities. Panels are cache-hosted, not embedded: fetch-panels populates
+//! [crate::whitelists::panel_cache_dir], and an absent cache yields "unknown".
+//! Built by experiments/atac_panel/build_atac_panel.py.
 
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
@@ -23,7 +19,7 @@ pub enum Cat {
     Promoter,
 }
 
-/// Map the `.atacpanel` category column to a [`Cat`].
+/// Map the .atacpanel category column to a [Cat].
 fn parse_cat(cat: &str) -> Option<Cat> {
     match cat {
         "exon" => Some(Cat::Exon),
@@ -48,26 +44,25 @@ pub struct AtacSignal {
 }
 
 impl AtacSignal {
-    /// True when the panel decisively called ATAC, usable to qualify a chemistry call.
+    /// True when the panel decisively called ATAC.
     pub fn is_atac(&self) -> bool {
         self.modality == "atac"
     }
 }
 
-/// The `.atacpanel` lookups, one per species (`#species` header), loaded once.
+/// The .atacpanel lookups, one per species (#species header), loaded once.
 fn species_panels() -> &'static HashMap<String, KmerPanel<Cat>> {
     static R: OnceLock<HashMap<String, KmerPanel<Cat>>> = OnceLock::new();
     R.get_or_init(|| KmerPanel::load_by_species("atacpanel", parse_cat))
 }
 
-/// Whether any ATAC panel is loaded (else `classify` returns "unknown").
+/// Whether any ATAC panel is loaded (else classify returns "unknown").
 pub fn have_panels() -> bool {
     !species_panels().is_empty()
 }
 
-/// The panel matching `species` (canonical, case-folded). Falls back to the sole panel
-/// when exactly one is cached (single-species deployment); otherwise `None`, so a
-/// multi-species cache without a species hint abstains rather than merge organisms.
+/// The panel matching species. Falls back to the sole cached panel; a multi-species cache
+/// without a species hint abstains rather than merge organisms.
 fn select<'a>(
     panels: &'a HashMap<String, KmerPanel<Cat>>,
     species: Option<&str>,
@@ -96,8 +91,7 @@ fn unknown() -> AtacSignal {
     }
 }
 
-/// Classify ATAC vs RNA from sampled reads, scoring against the panel for `species`.
-/// Pure: no I/O.
+/// Classify ATAC vs RNA from sampled reads against the panel for species.
 pub fn classify(reads: &[Vec<u8>], species: Option<&str>) -> AtacSignal {
     match pick_panel(species) {
         Some(p) => classify_with(reads, &p.map, p.k),
@@ -105,8 +99,8 @@ pub fn classify(reads: &[Vec<u8>], species: Option<&str>) -> AtacSignal {
     }
 }
 
-/// Classify over both mates. ATAC's two reads are both genomic, so scoring the pair
-/// doubles the sparse hit count (RNA's short R1 contributes ~nothing). Chemistry's seam.
+/// Classify over both mates: ATAC's two reads are both genomic, so the pair doubles the
+/// sparse hit count (RNA's barcode R1 contributes nothing).
 pub fn classify_pair(r1: &[Vec<u8>], r2: &[Vec<u8>], species: Option<&str>) -> AtacSignal {
     match pick_panel(species) {
         Some(p) => classify_with(r1.iter().chain(r2), &p.map, p.k),
@@ -114,7 +108,7 @@ pub fn classify_pair(r1: &[Vec<u8>], r2: &[Vec<u8>], species: Option<&str>) -> A
     }
 }
 
-/// Testable core: scan `reads` against an explicit panel map + k.
+/// Testable core: scan reads against an explicit panel map + k.
 fn classify_with<'a>(
     reads: impl IntoIterator<Item = &'a Vec<u8>>,
     panel: &FxHashMap<u128, Cat>,
@@ -229,7 +223,10 @@ mod tests {
         crate::fastq::sample(std::path::Path::new(u), n).unwrap().0
     }
     fn ena_url(srr: &str, tail: &str, mate: u8) -> String {
-        format!("https://ftp.sra.ebi.ac.uk/vol1/fastq/{}/{tail}/{srr}/{srr}_{mate}.fastq.gz", &srr[..6])
+        format!(
+            "https://ftp.sra.ebi.ac.uk/vol1/fastq/{}/{tail}/{srr}/{srr}_{mate}.fastq.gz",
+            &srr[..6]
+        )
     }
 
     const ATAC_R1: &str =
@@ -242,7 +239,11 @@ mod tests {
     #[test]
     #[ignore = "network: streams from ENA"]
     fn real_snatac_reads_atac() {
-        let r = classify_pair(&ena(ATAC_R1, 60_000), &ena(ATAC_R2, 60_000), Some("Homo_sapiens"));
+        let r = classify_pair(
+            &ena(ATAC_R1, 60_000),
+            &ena(ATAC_R2, 60_000),
+            Some("Homo_sapiens"),
+        );
         assert_eq!(r.modality, "atac", "{r:?}");
     }
 

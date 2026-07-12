@@ -34,6 +34,123 @@ pub struct FullReport {
     /// 3'/5' transcript-end bias. `None` when the end panel isn't available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end: Option<EndReport>,
+    pub classification: Classification,
+}
+
+/// `bulk_vs_sc` + `nucleus` + `chemistry`, rolled into one call.
+#[derive(Serialize, Default, Debug, Clone, PartialEq)]
+pub struct Classification {
+    /// "bulk" | "single-cell" | "single-nucleus" | "single-undetermined".
+    /// Single ATAC is always "single-undetermined"; see [`Classification::derive`].
+    pub library: String,
+    /// "RNA" | "ATAC" | "unknown".
+    pub modality: String,
+    /// e.g. "10x 3' v3". `None` for bulk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chemistry: Option<String>,
+    /// e.g. "single-nucleus RNA · 10x 3' v3".
+    pub label: String,
+    pub confidence: String,
+}
+
+fn weakest<'a>(a: &'a str, b: &'a str) -> &'a str {
+    let rank = |c: &str| match c {
+        "high" => 2,
+        "medium" => 1,
+        _ => 0,
+    };
+    if rank(a) <= rank(b) {
+        a
+    } else {
+        b
+    }
+}
+
+impl Classification {
+    /// Single if either signal says so; only chemistry catches 10x 5' (bulk-vs-sc calls it
+    /// "bulk_or_5prime_broken").
+    pub fn derive(
+        chemistry: &Option<ChemReport>,
+        bulk: &BulkReport,
+        nucleus: &Option<NucReport>,
+    ) -> Self {
+        let chem = chemistry.as_ref();
+        let chem_sc = chem.is_some_and(|c| c.is_single_cell);
+        let bulk_sc = matches!(bulk.verdict, "single_cell" | "single_cell_uncertain");
+        let is_single = chem_sc || bulk_sc;
+
+        // nucleus panel scores transcript k-mers; ATAC reads are gDNA. Most ATAC is run on
+        // nuclei, so defaulting to "cell" would usually be wrong.
+        if chem.is_some_and(|c| c.modality == "atac") {
+            let conf = weakest(
+                chem.map_or("low", |c| c.confidence.as_str()),
+                bulk.confidence,
+            );
+            let (library, label) = if bulk_sc {
+                ("single-undetermined", "single ATAC")
+            } else {
+                ("bulk", "bulk ATAC")
+            };
+            return Classification {
+                library: library.into(),
+                modality: "ATAC".into(),
+                chemistry: Some("ATAC (chromatin accessibility)".into()),
+                label: label.into(),
+                confidence: conf.into(),
+            };
+        }
+        let modality = if chem_sc {
+            "RNA"
+        } else {
+            match chem.map(|c| c.modality.as_str()) {
+                Some("rna") => "RNA",
+                _ => "unknown",
+            }
+        };
+        if !is_single {
+            let label = if modality == "unknown" {
+                "bulk".to_string()
+            } else {
+                format!("bulk {modality}")
+            };
+            return Classification {
+                library: "bulk".into(),
+                modality: modality.into(),
+                chemistry: None,
+                label,
+                confidence: bulk.confidence.to_string(),
+            };
+        }
+        let (library, nuc_conf) = match nucleus {
+            Some(n) if n.verdict == "single-nucleus" => ("single-nucleus", n.confidence.as_str()),
+            Some(n) if n.verdict == "single-cell" => ("single-cell", n.confidence.as_str()),
+            _ => ("single-undetermined", "low"),
+        };
+        // assay_display holds "Not single-cell" on a negative call
+        let chemistry = chem
+            .filter(|c| c.is_single_cell)
+            .map(|c| c.assay_display.clone());
+        let sc_conf = if chem_sc {
+            weakest(
+                chem.map_or("low", |c| c.confidence.as_str()),
+                bulk.confidence,
+            )
+        } else {
+            bulk.confidence
+        };
+        let confidence = weakest(nuc_conf, sc_conf).to_string();
+        let label = match &chemistry {
+            Some(a) => format!("{library} {modality} · {a}"),
+            None => format!("{library} {modality}"),
+        };
+        Classification {
+            library: library.to_string(),
+            modality: modality.into(),
+            chemistry,
+            label,
+            confidence,
+        }
+    }
 }
 
 /// Trimmed report for the `detect-all` subcommand: chemistry + species + sex only.
@@ -70,8 +187,7 @@ impl DetectAllReport {
         println!();
     }
 
-    /// One line per check: the call and its confidence, no evidence ledger or notes.
-    /// The default `detect-all` view; `--detailed` switches to [`print`].
+    /// Default `detect-all` view; `--detailed` switches to [`print`].
     pub fn print_summary(&self) {
         let conf = |c: &str| match c {
             "high" => c.green(),
@@ -88,14 +204,26 @@ impl DetectAllReport {
             println!("  chemistry: {} ({})", label, conf(&c.confidence));
         }
         if let Some(s) = &self.species {
-            let mislabel = if s.mislabel { "  MISLABEL".red().to_string() } else { String::new() };
-            println!("  species:   {} ({}){}", s.called, conf(&s.confidence), mislabel);
+            let mislabel = if s.mislabel {
+                "  MISLABEL".red().to_string()
+            } else {
+                String::new()
+            };
+            println!(
+                "  species:   {} ({}){}",
+                s.called,
+                conf(&s.confidence),
+                mislabel
+            );
         }
-        println!("  sex:       {} ({})", self.sex.verdict, conf(&self.sex.confidence));
+        println!(
+            "  sex:       {} ({})",
+            self.sex.verdict,
+            conf(&self.sex.confidence)
+        );
     }
 
-    /// The concise JSON counterpart of [`print_summary`]: the call + confidence per check.
-    /// `--detailed` serializes the full report instead.
+    /// JSON counterpart of [`print_summary`]; `--detailed` serializes the full report.
     pub fn summary_json(&self) -> serde_json::Value {
         use serde_json::json;
         json!({
@@ -118,10 +246,8 @@ impl DetectAllReport {
     }
 }
 
-/// Nucleus (sc-vs-sn) and end (3'/5') verdicts, each `None` when its panel isn't loaded.
-/// Shared by the native `check` and the wasm `run_check` so both surface the panels
-/// identically. Samples cDNA only when at least one panel is present, so the common
-/// no-panel path (no cached panels / wasm before injection) pays no extra FASTQ pass.
+/// Nucleus and end verdicts, each `None` when its panel isn't loaded. No FASTQ pass
+/// without a panel.
 pub fn panel_verdicts(
     r1: &std::path::Path,
     r2: Option<&std::path::Path>,
@@ -138,8 +264,7 @@ pub fn panel_verdicts(
 }
 
 impl FullReport {
-    /// Run chem; when it finds no 10x/Drop-seq match, fall back to the generic
-    /// seqspec detector. Shared by the CLI and web builds.
+    /// Run chem; on no 10x/Drop-seq match, fall back to the generic seqspec detector.
     pub fn chem_with_fallback(
         r1: &std::path::Path,
         r2: &std::path::Path,
@@ -156,8 +281,7 @@ impl FullReport {
         Ok((chem, assay))
     }
 
-    /// Self-contained HTML report. Routes through `serde_json::Value` so
-    /// [`crate::reporthtml`] is the only renderer for both CLI and web.
+    /// Via `serde_json::Value`, so [`crate::reporthtml`] stays the only renderer.
     pub fn to_html(&self) -> String {
         crate::reporthtml::render(&serde_json::to_value(self).unwrap_or(serde_json::Value::Null))
     }
@@ -168,6 +292,12 @@ impl FullReport {
         if let Some(r2) = &self.r2 {
             println!("  R2: {}", r2);
         }
+        let conf = match self.classification.confidence.as_str() {
+            "high" => self.classification.label.green(),
+            "medium" => self.classification.label.yellow(),
+            _ => self.classification.label.red(),
+        };
+        println!("  {} {}", "classification:".bold(), conf);
         println!();
         if let Some(chem) = &self.chemistry {
             chem.print();
@@ -244,6 +374,7 @@ mod tests {
             sex,
             nucleus: None,
             end: None,
+            classification: Classification::default(),
         }
     }
 
@@ -255,6 +386,156 @@ mod tests {
             !json.contains("\"sex\""),
             "expected no sex key when sex is None, got: {json}"
         );
+    }
+
+    fn bulk_rep(verdict: &'static str) -> BulkReport {
+        BulkReport {
+            r1_length_dominant: 28,
+            r1_length_stddev: 0.0,
+            r1_length_distribution: vec![],
+            verdict,
+            confidence: "high",
+            notes: vec![],
+        }
+    }
+
+    fn nuc_rep(verdict: &str) -> crate::nucpanel::NucReport {
+        crate::nucpanel::NucReport {
+            verdict: verdict.into(),
+            confidence: "high".into(),
+            n_intron: 0,
+            n_exon: 0,
+            n_mito: 0,
+            reads_scanned: 0,
+            intron_frac: 0.0,
+            mito_pct: 0.0,
+            notes: vec![],
+        }
+    }
+
+    #[test]
+    fn classify_bulk() {
+        let c = Classification::derive(&None, &bulk_rep("bulk"), &None);
+        assert_eq!(c.library, "bulk");
+        assert_eq!(c.chemistry, None);
+        assert_eq!(c.label, "bulk");
+    }
+
+    #[test]
+    fn classify_single_cell_vs_nucleus() {
+        let cell = Classification::derive(
+            &None,
+            &bulk_rep("single_cell"),
+            &Some(nuc_rep("single-cell")),
+        );
+        assert_eq!(cell.library, "single-cell");
+        let nuc = Classification::derive(
+            &None,
+            &bulk_rep("single_cell"),
+            &Some(nuc_rep("single-nucleus")),
+        );
+        assert_eq!(nuc.library, "single-nucleus");
+    }
+
+    #[test]
+    fn classify_single_undetermined_when_nucleus_missing() {
+        let c = Classification::derive(&None, &bulk_rep("single_cell"), &None);
+        assert_eq!(c.library, "single-undetermined");
+        let amb =
+            Classification::derive(&None, &bulk_rep("single_cell"), &Some(nuc_rep("ambiguous")));
+        assert_eq!(amb.library, "single-undetermined");
+    }
+
+    fn chem_rep(is_single_cell: bool, modality: &str, confidence: &str) -> ChemReport {
+        ChemReport {
+            r1_length_dominant: 28,
+            r1_length_distribution: vec![],
+            reads_sampled: 0,
+            assay_id: "none".into(),
+            // matches what chemistry::report writes on a negative call
+            assay_display: if is_single_cell {
+                "10x 3' v3".into()
+            } else {
+                "Not single-cell".into()
+            },
+            cb_read: "R1".into(),
+            cb_offset: 0,
+            cb_len: 16,
+            umi_offset: 16,
+            umi_len: 12,
+            n_cb_candidates: 0,
+            is_single_cell,
+            early_stop: false,
+            whitelist: None,
+            whitelist_scores: vec![],
+            anchor_scores: vec![],
+            tool_hints: vec![],
+            confidence: confidence.into(),
+            modality: modality.into(),
+            atac_promoter_frac: 0.0,
+            end: "unknown".into(),
+            end_confidence: "low".into(),
+            n5: 0,
+            n3: 0,
+            end_ratio: 0.0,
+            interpretation: vec![],
+            notes: vec![],
+        }
+    }
+
+    #[test]
+    fn negative_chemistry_never_names_an_assay() {
+        let c = Classification::derive(
+            &Some(chem_rep(false, "rna", "high")),
+            &bulk_rep("single_cell"),
+            &Some(nuc_rep("single-cell")),
+        );
+        assert_eq!(c.chemistry, None);
+        assert_eq!(c.label, "single-cell RNA");
+        assert!(!c.label.contains("Not single-cell"));
+    }
+
+    #[test]
+    fn uncertain_single_cell_is_not_bulk() {
+        let c = Classification::derive(&None, &bulk_rep("single_cell_uncertain"), &None);
+        assert_eq!(c.library, "single-undetermined");
+        assert_ne!(c.library, "bulk");
+    }
+
+    #[test]
+    fn confidence_is_the_weakest_signal() {
+        let mut bulk = bulk_rep("single_cell");
+        bulk.confidence = "low";
+        let c = Classification::derive(
+            &Some(chem_rep(true, "rna", "low")),
+            &bulk,
+            &Some(nuc_rep("single-nucleus")),
+        );
+        assert_eq!(c.confidence, "low");
+    }
+
+    #[test]
+    fn single_atac_never_claims_cell_or_nucleus() {
+        for verdict in ["single_cell", "single_cell_uncertain"] {
+            let c = Classification::derive(
+                &Some(chem_rep(false, "atac", "high")),
+                &bulk_rep(verdict),
+                &None,
+            );
+            assert_eq!(c.library, "single-undetermined");
+            assert_eq!(c.label, "single ATAC");
+        }
+    }
+
+    #[test]
+    fn nucleus_panel_cannot_override_atac() {
+        // a nucleus verdict on gDNA reads is noise
+        let c = Classification::derive(
+            &Some(chem_rep(false, "atac", "high")),
+            &bulk_rep("single_cell"),
+            &Some(nuc_rep("single-cell")),
+        );
+        assert_eq!(c.library, "single-undetermined");
     }
 
     #[test]

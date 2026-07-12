@@ -313,7 +313,8 @@ mod bodycache {
 #[cfg(not(target_arch = "wasm32"))]
 fn open(path: &Path) -> Result<Box<dyn FastxReader>> {
     if !is_remote(path) {
-        return parse_fastx_file(path).with_context(|| format!("opening fastq: {}", path.display()));
+        return parse_fastx_file(path)
+            .with_context(|| format!("opening fastq: {}", path.display()));
     }
     let orig = path.to_string_lossy();
     let t0 = std::time::Instant::now();
@@ -612,7 +613,10 @@ mod tests {
             "https://example.com/a.fastq.gz"
         );
         // Already ftp / local path untouched.
-        assert_eq!(prefer_ftp("ftp://ftp.sra.ebi.ac.uk/x"), "ftp://ftp.sra.ebi.ac.uk/x");
+        assert_eq!(
+            prefer_ftp("ftp://ftp.sra.ebi.ac.uk/x"),
+            "ftp://ftp.sra.ebi.ac.uk/x"
+        );
         assert_eq!(prefer_ftp("/local/x.fastq.gz"), "/local/x.fastq.gz");
     }
 

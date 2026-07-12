@@ -144,8 +144,10 @@ fn header_k(text: &str) -> Option<usize> {
 }
 
 fn header_species(text: &str) -> Option<String> {
-    text.lines()
-        .find_map(|l| l.strip_prefix("#species\t").map(|r| r.trim().to_ascii_lowercase()))
+    text.lines().find_map(|l| {
+        l.strip_prefix("#species\t")
+            .map(|r| r.trim().to_ascii_lowercase())
+    })
 }
 
 /// Fold one panel's rows into `map`, storing both strand orientations so a raw read

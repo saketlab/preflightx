@@ -1,11 +1,8 @@
-//! Sex-marker k-mer panels: parse the `build.rs`-embedded `data/sexmarkers/*.panel`
-//! tables into a fast lookup used by [`crate::sex`].
+//! Sex-marker k-mer panels: the build.rs-embedded data/sexmarkers/*.panel tables of
+//! canonical k-mers, parsed into the lookup used by [crate::sex].
 //!
-//! A panel is a tiny, public-genome-derived table of **canonical** k-mers (one strand of
-//! each, `min(seq, revcomp)`), each tagged with a marker gene and a category
-//! (`female` = the X-inactivation lncRNA XIST/Xist; `male` = a Y-linked gene). A k-mer is
-//! in the panel only if it uniquely identifies its gene across the genome *and* the
-//! transcriptome (see `experiments/sex_panel/`), so a read containing it can only have
+//! A k-mer is in a panel only if it uniquely identifies its marker gene across the genome
+//! and the transcriptome (see experiments/sex_panel/), so a read carrying it can only have
 //! come from that gene. Both orientations are stored, so a read's forward k-mer matches
 //! regardless of cDNA strand.
 
@@ -25,11 +22,11 @@ pub enum Category {
 /// One species' parsed panel: metadata header + canonical-k-mer lookup.
 pub struct SexPanel {
     pub species: String,
-    pub mechanism: String, // e.g. "XY_XIST"; selects the decision interpretation
+    pub mechanism: String, // e.g. "XY_XIST"; selects the decision rule
     pub status: String,    // "validated" | "experimental"
     pub k: usize,
     pub genes: Vec<String>,
-    /// 2-bit encoded k-mer (both orientations stored) -> (category, index into `genes`)
+    /// 2-bit encoded k-mer (both orientations) -> (category, index into genes)
     kmers: FxHashMap<u128, (Category, u16)>,
     #[cfg(test)]
     sample_kmers: Vec<(Vec<u8>, Category)>,
@@ -51,7 +48,7 @@ impl SexPanel {
     pub fn is_empty(&self) -> bool {
         self.kmers.is_empty()
     }
-    /// Whether the panel carries any Y-linked (male) markers (XIST-only panels can't call males).
+    /// Whether the panel carries Y-linked markers; XIST-only panels can't call males.
     pub fn has_y(&self) -> bool {
         self.kmers.values().any(|(c, _)| *c == Category::Male)
     }
@@ -103,9 +100,8 @@ pub(crate) fn encode_kmer(seq: &[u8]) -> Option<u128> {
     Some(key)
 }
 
-/// Encode a k-mer and its reverse complement in one pass, without allocating the
-/// revcomp. The revcomp key is `sum_i comp(base_i) << 2i` where `comp = 3 - bits`
-/// (A<->T, C<->G). Ambiguous bases or k > 64 return `None`.
+/// Encode a k-mer and its reverse complement in one pass, without allocating the revcomp:
+/// the revcomp key is sum_i comp(base_i) << 2i, where comp = 3 - bits (A<->T, C<->G).
 pub(crate) fn encode_kmer_both_strands(seq: &[u8]) -> Option<(u128, u128)> {
     if seq.len() > 64 {
         return None;
@@ -120,12 +116,8 @@ pub(crate) fn encode_kmer_both_strands(seq: &[u8]) -> Option<(u128, u128)> {
     Some((fwd, rc))
 }
 
-/// Slide a k-window over `seq`, calling `hit` with the 2-bit encoded key for each
-/// A/C/G/T-only window. Windows containing N or other ambiguous bases cannot match
-/// the marker tables, so they are skipped instead of hashed.
-///
-/// Returns `false` only when the read is shorter than `k`; a long all-N read still
-/// counts as scanned, matching the previous byte-slice lookup semantics.
+/// Slide a k-window over seq, calling hit with the 2-bit key of each A/C/G/T-only window.
+/// Returns false only when the read is shorter than k; a long all-N read counts as scanned.
 pub(crate) fn scan_encoded_windows(seq: &[u8], k: usize, mut hit: impl FnMut(u128)) -> bool {
     if seq.len() < k {
         return false;
@@ -189,8 +181,7 @@ fn parse_panel(text: &str) -> Option<SexPanel> {
             genes.push(gene.to_string());
             (genes.len() - 1) as u16
         });
-        // Store both orientations so a read's forward k-mer slice matches directly,
-        // without canonicalising per k-mer at scan time.
+        // both orientations, so scan-time lookup needs no per-k-mer canonicalisation
         if let Some((fwd, rc)) = encode_kmer_both_strands(kmer.as_bytes()) {
             kmers.insert(fwd, (category, idx));
             kmers.entry(rc).or_insert((category, idx));
