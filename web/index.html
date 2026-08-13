@@ -1055,7 +1055,7 @@ async function resolveStudy(acc) {
     const p = await apiJson(`/project/${A}`);
     // Read the documented cross-reference fields rather than grepping the whole
     // blob (which could match an unrelated study mentioned in free text).
-    const s = firstStudy(p.alias) || firstStudy(p.relation) || firstStudy(p.external_id);
+    const s = xref(p, /[SED]RP\d+/);
     if (s) return s;
     throw new Error(`no SRA study linked to ${A}`);
   }
@@ -1068,14 +1068,20 @@ async function resolveStudy(acc) {
   }
   throw new Error(`unsupported accession: ${A} (try SRP/ERP/DRP/GSE/PRJ)`);
 }
-function firstStudy(field) {
-  if (field == null) return null;
-  const items = Array.isArray(field) ? field : [field];
-  for (const v of items) {
-    const m = String(v).toUpperCase().match(/[SED]RP\d+/);
-    if (m) return m[0];
+// First accession matching `re` in a project's cross-reference fields (external_id is
+// sometimes an object, e.g. {"GEO":"GSE1"}).
+function xref(p, re) {
+  for (const f of [p && p.alias, p && p.relation, p && p.external_id]) {
+    for (const v of (f == null ? [] : [].concat(f))) {
+      const m = String(typeof v === 'object' ? JSON.stringify(v) : v).toUpperCase().match(re);
+      if (m) return m[0];
+    }
   }
   return null;
+}
+async function gseFor(study) {
+  if (!STUDY_RE.test(study || '')) return null;
+  return xref(await apiJson(`/project/${study}`).catch(() => null), /GSE\d+/);
 }
 
 // fastq_ftp is a ";"-separated list of host/paths. Prefix https and pick the read(s):
@@ -1126,6 +1132,10 @@ async function runOne(ctx) {
     if (sx) r.sex = sx;
     const ms = performance.now() - t0;
     r._label = ctx.run.run_accession;
+    if (ctx.gse) r._gse = ctx.gse;
+    const { gsm, title } = await ctx.sample;
+    const rtitle = [gsm, title].filter(Boolean).join(': ');
+    if (rtitle) r._title = rtitle;
     ctx.report = r;
     const c = r.chemistry || {};
     const singleEnd = !r.chemistry;
@@ -1223,9 +1233,10 @@ async function fillSampleCell(td, run) {
       paint();
     }
   }
+  return { gsm, title };
 }
 
-function renderRunsTable(study, data, runs, speciesByExp) {
+function renderRunsTable(study, data, runs, speciesByExp, gse) {
   const head = document.createElement('div');
   head.className = 'runs-head';
   const meta = document.createElement('div');
@@ -1252,7 +1263,7 @@ function renderRunsTable(study, data, runs, speciesByExp) {
     const tdAcc = document.createElement('td'); tdAcc.className = 'acc'; tdAcc.dataset.label = 'run'; tdAcc.textContent = run.run_accession;
     const tdSample = document.createElement('td'); tdSample.dataset.label = 'sample / title';
     tdSample.style.cssText = 'font-size:12px;line-height:1.35';
-    fillSampleCell(tdSample, run);   // ids shown immediately; GSM + title filled in lazily
+    const sample = fillSampleCell(tdSample, run);   // ids shown immediately; GSM + title filled in lazily
     const species = speciesFor(speciesByExp && speciesByExp.get(run.experiment_accession));
     const tdSpecies = document.createElement('td'); tdSpecies.dataset.label = 'species';
     tdSpecies.style.cssText = 'font-size:12px';
@@ -1274,7 +1285,7 @@ function renderRunsTable(study, data, runs, speciesByExp) {
     const why = document.createElement('div'); why.className = 'why';
     detailTd.append(why); detailTr.append(detailTd);
     tb.append(tr, detailTr);
-    const ctx = { run, reads, btn, resCell: tdRes, detailTr, why, species, soleRun: runs.length === 1 };
+    const ctx = { run, reads, btn, resCell: tdRes, detailTr, why, species, gse, sample, soleRun: runs.length === 1 };
     ctxs.push(ctx);
     btn.addEventListener('click', () => runCtx(ctx));
   }
@@ -1364,21 +1375,25 @@ async function fetchRuns() {
       const run = await apiJson(`/run/${raw.toUpperCase()}`);
       const paired = (run.library_layout || '').toUpperCase() === 'PAIRED';
       const data = { total_runs: 1, paired_runs: paired ? 1 : 0, single_runs: paired ? 0 : 1 };
-      const species = await resolveOneSpecies(run).catch(() => new Map());
-      renderRunsTable(run.study_accession || run.run_accession, data, [run], species);
+      const [species, gse] = await Promise.all([
+        resolveOneSpecies(run).catch(() => new Map()),
+        gseFor(run.study_accession),
+      ]);
+      renderRunsTable(run.study_accession || run.run_accession, data, [run], species, gse);
       accStatus(`run ${run.run_accession}${run.study_accession ? ` (study ${run.study_accession})` : ''}`);
       return;
     }
     accStatus(`resolving ${raw}…`);
     const study = await resolveStudy(raw);
     accStatus(`fetching runs for ${study}…`);
-    const [data, species] = await Promise.all([
+    const [data, species, gse] = await Promise.all([
       apiJson(`/project/${study}/runs`),
       studySpeciesByExperiment(study).catch(() => new Map()),
+      GSE_RE.test(raw.toUpperCase()) ? raw.toUpperCase() : gseFor(study),
     ]);
     const runs = data.runs || [];
     if (!runs.length) { accStatus(`no runs found for ${study}`, true); return; }
-    renderRunsTable(study, data, runs, species);
+    renderRunsTable(study, data, runs, species, gse);
     const shown = runs.length < data.total_runs ? ` (showing first ${runs.length})` : '';
     accStatus(`${data.total_runs} run(s) in ${study}${shown}`);
   } catch (e) {

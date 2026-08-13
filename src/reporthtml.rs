@@ -54,7 +54,16 @@ fn section(r: &Value) -> String {
     };
 
     let label_html = label(r)
-        .map(|l| format!("<div class=\"rlabel\">{}</div>", esc(&l)))
+        .map(|l| {
+            let mut line = esc(&l);
+            for k in ["_gse", "_title"] {
+                if let Some(v) = str_of(r, k) {
+                    line.push_str(" · ");
+                    line.push_str(&esc(&v));
+                }
+            }
+            format!("<div class=\"rlabel\">{line}</div>")
+        })
         .unwrap_or_default();
 
     format!(
@@ -456,5 +465,15 @@ mod tests {
         let html = render(&r);
         assert!(!html.contains("<script>x"));
         assert!(html.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn label_carries_gse_and_title() {
+        let r = json!({"_label": "SRR1", "_gse": "GSE180578", "_title": "GSM1: <b>naive</b>",
+            "chemistry": {"assay_id": "10x_3prime_v2", "is_single_cell": true}});
+        let html = render(&r);
+        assert!(html.contains("SRR1 · GSE180578 · GSM1: &lt;b&gt;naive&lt;/b&gt;"));
+        let bare = render(&json!({"_label": "SRR2", "chemistry": null}));
+        assert!(bare.contains(">SRR2</div>"));
     }
 }
