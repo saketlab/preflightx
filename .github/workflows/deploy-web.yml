@@ -64,7 +64,7 @@ jobs:
       - name: Fetch all barcode whitelists
         run: |
           mkdir -p web/whitelists
-          PREFLIGHTX_CACHE="$PWD/web/whitelists" cargo run --release -- fetch-whitelists
+          PREFLIGHTX_CACHE="$PWD/web" cargo run --release -- fetch-whitelists
           ls -lh web/whitelists
 
       - name: Cache species/sex panels
