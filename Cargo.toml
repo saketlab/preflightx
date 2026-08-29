@@ -1,6 +1,6 @@
 [package]
 name = "preflightx"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "Pre-flight sanity checks for single-cell RNA-seq fastq pairs: determine assay type, chemistry, species and sex from fastqs"
 license = "MIT"

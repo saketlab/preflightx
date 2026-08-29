@@ -264,7 +264,9 @@ pub fn panel_verdicts(
 }
 
 impl FullReport {
-    /// Run chem; on no 10x/Drop-seq match, fall back to the generic seqspec detector.
+    /// Run chem; fall back to the generic seqspec detector unless the winning chemistry
+    /// has a barcode list. Drop-seq alone has none, so its geometry-only ~20 bp R1 call
+    /// would suppress the detector on combinatorial libraries of that length.
     pub fn chem_with_fallback(
         r1: &std::path::Path,
         r2: &std::path::Path,
@@ -273,7 +275,8 @@ impl FullReport {
         species: Option<&str>,
     ) -> anyhow::Result<(ChemReport, Option<DetectReport>)> {
         let chem = crate::chemistry::detect(r1, r2, n, cache, species)?;
-        let assay = if chem.is_single_cell {
+        let has_whitelist = chem.is_single_cell && chem.whitelist.is_some();
+        let assay = if has_whitelist {
             None
         } else {
             Some(crate::assaydetect::detect(r1, r2, n)?)
