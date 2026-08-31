@@ -133,22 +133,9 @@ fn geom_of(spec_file: &str) -> Option<usize> {
         .map(|g| g.read_len)
 }
 
-/// The observed barcode-read span (first barcode/UMI through the last, before the
-/// insert), the segments `observed_read_len` sums. Used by the doc generator.
+/// Observed barcode-read span as Vec, for the doc generators.
 fn observed_span(layout: &[Segment]) -> Vec<&Segment> {
-    let is_bcu = |s: &Segment| is_barcode_type(&s.region_type) || is_umi_type(&s.region_type);
-    let Some(start) = layout.iter().position(&is_bcu) else {
-        return vec![];
-    };
-    let end = layout[start..]
-        .iter()
-        .position(is_read_terminator)
-        .map_or(layout.len(), |i| start + i);
-    let window = &layout[start..end];
-    let Some(last) = window.iter().rposition(&is_bcu) else {
-        return vec![];
-    };
-    window[..=last].iter().collect()
+    super::observed_span(layout).map_or_else(Vec::new, |s| s.iter().collect())
 }
 
 /// Regenerate `docs/assay-geometries.md` from the catalogue. Run on demand:

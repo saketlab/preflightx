@@ -120,7 +120,8 @@ fn stat_grid(r: &Value, chem: Option<&Value>, not_sc: bool) -> String {
     let mut g = Vec::new();
     if !not_sc {
         if let Some(c) = chem {
-            if let Some(cb) = num_of(c, "cb_len") {
+            // cb_len is 0 on an abstention, not absent
+            if let Some(cb) = num_of(c, "cb_len").filter(|&n| n > 0.0) {
                 g.push(stat(
                     "barcode geometry",
                     &format!(

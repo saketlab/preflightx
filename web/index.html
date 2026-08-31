@@ -764,7 +764,8 @@ function assaySteps(r) {
 }
 
 function renderTrack(el, chem) {
-  if (!chem || chem.is_single_cell === false || chem.cb_len == null) { el.innerHTML = ''; return; }
+  // cb_len is 0 on an abstention, not null
+  if (!chem || chem.is_single_cell === false || !chem.cb_len) { el.innerHTML = ''; return; }
   const segs = [];
   if (chem.cb_offset > 0) segs.push({ len: chem.cb_offset, cls: 'adapter', lbl: 'adapter' });
   segs.push({ len: chem.cb_len, cls: 'cb', lbl: `BC ${chem.cb_len}` });
@@ -789,7 +790,7 @@ function renderCheck(r, ms) {
   els.vmain.classList.toggle('warn', notSc && !isAtac && !singleEnd);
   els.vconf.innerHTML = (singleEnd || (notSc && !isAtac)) ? '' : pill(chem.confidence);
   const g = [];
-  if (!notSc && chem.cb_len != null) g.push(stat('barcode geometry', `CB ${chem.cb_len} + UMI ${chem.umi_len} (${chem.cb_read})`));
+  if (!notSc && chem.cb_len) g.push(stat('barcode geometry', `CB ${chem.cb_len} + UMI ${chem.umi_len} (${chem.cb_read})`));
   if (chem.r1_length_dominant != null) g.push(stat('R1 dominant len', chem.r1_length_dominant + ' bp'));
   if (chem.reads_sampled != null) g.push(stat('reads used', (+chem.reads_sampled).toLocaleString()));
   if (r.bulk_vs_sc) g.push(stat('library', r.bulk_vs_sc.verdict || '–'));
@@ -1153,7 +1154,7 @@ async function runOne(ctx) {
         `<span style="color:var(--warn);font-weight:650">Not single-cell</span> ` +
         `<span style="color:var(--muted)">R1 ${c.r1_length_dominant}bp, no barcode geometry</span>${reads}`;
     } else {
-      const geom = c.cb_len != null
+      const geom = c.cb_len
         ? ` <span style="color:var(--muted)">CB${c.cb_len}+UMI${c.umi_len}</span>` : '';
       ctx.resCell.innerHTML = `${escapeHtml(c.assay_display || c.assay_id || 'unknown')} ${pill(c.confidence)}${geom}${reads}`;
     }

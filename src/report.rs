@@ -126,9 +126,10 @@ impl Classification {
             Some(n) if n.verdict == "single-cell" => ("single-cell", n.confidence.as_str()),
             _ => ("single-undetermined", "low"),
         };
-        // assay_display holds "Not single-cell" on a negative call
+        // assay_display is "Not single-cell" on a negative call; assay_id is
+        // "unknown" on an abstention.
         let chemistry = chem
-            .filter(|c| c.is_single_cell)
+            .filter(|c| c.is_single_cell && c.assay_id != "unknown")
             .map(|c| c.assay_display.clone());
         let sc_conf = if chem_sc {
             weakest(

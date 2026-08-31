@@ -22,6 +22,8 @@ pub struct AssaySpec {
     pub display_name: &'static str,
     pub r1_cb_offset: usize,
     pub r1_cb_len: usize,
+    /// UMI start in R1; CEL-Seq2 puts the UMI before the barcode.
+    pub r1_umi_offset: usize,
     pub r1_umi_len: usize,
     pub whitelist: Option<WhitelistDef>,
     pub r2_anchors: &'static [AnchorMotif],
@@ -32,11 +34,9 @@ pub struct AssaySpec {
 }
 
 impl AssaySpec {
+    /// Max of the CB and UMI ends; the UMI may precede the barcode.
     pub fn r1_expected_len(&self) -> usize {
-        self.r1_cb_offset + self.r1_cb_len + self.r1_umi_len
-    }
-    pub fn umi_offset(&self) -> usize {
-        self.r1_cb_offset + self.r1_cb_len
+        (self.r1_cb_offset + self.r1_cb_len).max(self.r1_umi_offset + self.r1_umi_len)
     }
     /// Generate STARsolo CB_UMI_Simple flags from this assay's geometry.
     /// Keeps the hint in sync with the spec automatically.
@@ -51,7 +51,7 @@ impl AssaySpec {
             wl,
             self.r1_cb_offset + 1,
             self.r1_cb_len,
-            self.umi_offset() + 1,
+            self.r1_umi_offset + 1,
             self.r1_umi_len,
         )
     }
@@ -113,6 +113,7 @@ pub static ASSAYS: &[AssaySpec] = &[
         display_name: "10x Chromium 3' v1",
         r1_cb_offset: 0,
         r1_cb_len: 14,
+        r1_umi_offset: 14,
         r1_umi_len: 10,
         whitelist: Some(WL_737K_2014),
         r2_anchors: &A_NONE,
@@ -123,6 +124,7 @@ pub static ASSAYS: &[AssaySpec] = &[
         display_name: "10x Chromium 3' v2",
         r1_cb_offset: 0,
         r1_cb_len: 16,
+        r1_umi_offset: 16,
         r1_umi_len: 10,
         whitelist: Some(WL_737K_2016),
         r2_anchors: &A_TSO_PRESENT,
@@ -137,6 +139,7 @@ pub static ASSAYS: &[AssaySpec] = &[
         display_name: "10x Chromium 5' v1",
         r1_cb_offset: 0,
         r1_cb_len: 16,
+        r1_umi_offset: 16,
         r1_umi_len: 10,
         whitelist: Some(WL_737K_2016),
         r2_anchors: &A_TSO_ABSENT,
@@ -147,6 +150,7 @@ pub static ASSAYS: &[AssaySpec] = &[
         display_name: "10x Chromium 5' v2",
         r1_cb_offset: 0,
         r1_cb_len: 16,
+        r1_umi_offset: 16,
         r1_umi_len: 10,
         whitelist: Some(WL_3M_5PGEX2023),
         r2_anchors: &A_TSO_ABSENT,
@@ -157,6 +161,7 @@ pub static ASSAYS: &[AssaySpec] = &[
         display_name: "10x Chromium 3' v3",
         r1_cb_offset: 0,
         r1_cb_len: 16,
+        r1_umi_offset: 16,
         r1_umi_len: 12,
         whitelist: Some(WL_3M_FEB2018),
         r2_anchors: &A_TSO_PRESENT,
@@ -171,6 +176,7 @@ pub static ASSAYS: &[AssaySpec] = &[
         display_name: "10x Chromium 3' v4 (GEM-X)",
         r1_cb_offset: 0,
         r1_cb_len: 16,
+        r1_umi_offset: 16,
         r1_umi_len: 12,
         whitelist: Some(WL_3M_3PGEX2023),
         r2_anchors: &A_TSO_PRESENT,
@@ -181,6 +187,7 @@ pub static ASSAYS: &[AssaySpec] = &[
         display_name: "10x Chromium 5' v3",
         r1_cb_offset: 0,
         r1_cb_len: 16,
+        r1_umi_offset: 16,
         r1_umi_len: 12,
         whitelist: Some(WL_3M_5PGEX2023),
         r2_anchors: &A_TSO_ABSENT,
@@ -191,6 +198,7 @@ pub static ASSAYS: &[AssaySpec] = &[
         display_name: "Drop-seq",
         r1_cb_offset: 0,
         r1_cb_len: 12,
+        r1_umi_offset: 12,
         r1_umi_len: 8,
         whitelist: None,
         r2_anchors: &A_NONE,
@@ -207,10 +215,25 @@ mod tests {
     }
 
     #[test]
-    fn r1_expected_len_sums_geometry() {
+    fn r1_expected_len_spans_whichever_part_ends_last() {
         // 16 CB + 12 UMI = 28 (3' v3); 12 CB + 8 UMI = 20 (Drop-seq).
         assert_eq!(spec("10x_3prime_v3").r1_expected_len(), 28);
         assert_eq!(spec("drop_seq").r1_expected_len(), 20);
+        // UMI 0..6 + CB 6..12 spans 12; a sum double-counts the offset.
+        let celseq2 = AssaySpec {
+            id: "celseq2",
+            display_name: "CEL-Seq2",
+            r1_cb_offset: 6,
+            r1_cb_len: 6,
+            r1_umi_offset: 0,
+            r1_umi_len: 6,
+            whitelist: None,
+            r2_anchors: &A_NONE,
+            tool_hints: &[],
+        };
+        assert_eq!(celseq2.r1_expected_len(), 12);
+        assert!(celseq2.starsolo_hint().contains("--soloUMIstart 1"));
+        assert!(celseq2.starsolo_hint().contains("--soloCBstart 7"));
     }
 
     #[test]

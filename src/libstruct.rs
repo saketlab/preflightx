@@ -69,7 +69,7 @@ fn is_umi_type(region_type: &str) -> bool {
 }
 
 /// A barcode or UMI region; the first one marks the start of the observed read.
-pub fn is_barcode_or_umi(region_type: &str) -> bool {
+fn is_barcode_or_umi(region_type: &str) -> bool {
     is_barcode_type(region_type) || is_umi_type(region_type)
 }
 
@@ -383,8 +383,8 @@ impl ScGeometry {
 /// sequenced — e.g. scifi-RNA-seq's inter-barcode adapters). A trailing adapter after
 /// the last barcode (a read-primer region a loose `primer_id` left in the read, e.g.
 /// quartz-seq's read-2 adapter) is dropped. Variable-length barcodes (inDrop) are
-/// kept. Returns the observed barcode-read length, or `None` if there is no barcode.
-fn observed_read_len(layout: &[Segment]) -> Option<usize> {
+/// kept. Returns those segments, or None if the read carries no barcode.
+pub fn observed_span(layout: &[Segment]) -> Option<&[Segment]> {
     let is_bc_or_umi = |s: &Segment| is_barcode_type(&s.region_type) || is_umi_type(&s.region_type);
     let start = layout.iter().position(&is_bc_or_umi)?;
     // The window runs from the first barcode/UMI to the cDNA/gDNA insert (or the end).
@@ -398,7 +398,11 @@ fn observed_read_len(layout: &[Segment]) -> Option<usize> {
     let span = &window[..=last];
     span.iter()
         .any(|s| is_barcode_type(&s.region_type))
-        .then(|| span.iter().map(|s| s.len).sum())
+        .then_some(span)
+}
+
+fn observed_read_len(layout: &[Segment]) -> Option<usize> {
+    Some(observed_span(layout)?.iter().map(|s| s.len).sum())
 }
 
 /// Every single-cell barcode-read geometry in the embedded catalogue (one per assay

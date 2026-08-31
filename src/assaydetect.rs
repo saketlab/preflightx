@@ -118,7 +118,10 @@ pub fn catalogue() -> Vec<CatalogueEntry> {
         .iter()
         .map(|a| {
             let (detectable, anchors) = match a.structural_read() {
-                Some((_, layout)) => (true, anchors_of(&layout).len()),
+                Some((_, layout)) => (
+                    true,
+                    anchors_of(crate::libstruct::observed_span(&layout).unwrap_or(&layout)).len(),
+                ),
                 None => (false, 0),
             };
             CatalogueEntry {
@@ -556,20 +559,14 @@ fn onlist_overlap_llr(
 }
 
 /// Onlist segments for `a`, offset to align with the reads `score_obs` sees.
-/// `barcode_onlist_segments` counts from the first barcode/UMI, but the observed read
-/// (like `anchors_of`) counts from the layout start, so shift by the leading length.
+/// Offsets pass through: both count from the first barcode/UMI.
 /// Keeps only segments with a hosted onlist, re-keyed to the cache name.
 fn resolved_onlist_segs(a: &Assay, layout: &[Segment]) -> Vec<OnlistSeg> {
-    let leading: usize = layout
-        .iter()
-        .take_while(|s| !crate::libstruct::is_barcode_or_umi(&s.region_type))
-        .map(|s| s.len)
-        .sum();
     crate::libstruct::barcode_onlist_segments_of(layout)
         .into_iter()
         .filter_map(|(off, len, max_len, local)| {
             onlist_source(&a.spec_file, &local).map(|src| OnlistSeg {
-                offset: leading + off,
+                offset: off,
                 len,
                 max_len,
                 filename: src.cache_name.to_string(),
@@ -593,9 +590,11 @@ pub fn detect_assays(
         let Some((read_id, layout)) = a.structural_read() else {
             continue;
         };
-        let expected: usize = layout.iter().map(|s| s.len).sum();
-        let anchors = anchors_of(&layout);
-        let onlist_segs = resolved_onlist_segs(a, &layout);
+        // score the sequenced window; the full layout counts unsequenced leading primers
+        let scored_layout = crate::libstruct::observed_span(&layout).unwrap_or(&layout);
+        let expected: usize = scored_layout.iter().map(|s| s.len).sum();
+        let anchors = anchors_of(scored_layout);
+        let onlist_segs = resolved_onlist_segs(a, scored_layout);
 
         let mut best: Option<AssayHit> = None;
         for (orient, obs) in [("r1=barcode", r1), ("r2=barcode", r2)] {
@@ -795,10 +794,10 @@ mod tests {
         }
     }
 
-    /// Build one synthetic read matching a structural layout: fixed segments use
-    /// their real sequence, variable barcode/UMI segments are filled with A's
-    /// (content is irrelevant — only the linker anchors are scored).
+    /// One synthetic read over the sequenced window.
+    /// Barcode/UMI are filled with A's; only the linker anchors are scored.
     fn synth_read(layout: &[Segment]) -> Vec<u8> {
+        let layout = crate::libstruct::observed_span(layout).unwrap_or(layout);
         let mut out = Vec::new();
         for s in layout {
             match &s.sequence {
@@ -807,6 +806,32 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn expected_len_is_the_sequenced_window_not_the_leading_primer() {
+        // Drop-seq opens with a 39 bp Read1 primer; scoring must use the CB12+UMI8 window.
+        let assays = embedded_assays();
+        let drop = assays
+            .iter()
+            .find(|a| a.spec_file == "drop_seq.spec.yaml")
+            .expect("drop_seq catalogued");
+        let (_rid, layout) = drop.structural_read().unwrap();
+        let full_layout: usize = layout.iter().map(|s| s.len).sum();
+        assert!(
+            full_layout > 50,
+            "layout should carry the primer: {full_layout}"
+        );
+
+        let r1: Vec<Vec<u8>> = (0..200).map(|_| synth_read(&layout)).collect();
+        let r2: Vec<Vec<u8>> = (0..200).map(|_| vec![b'G'; 90]).collect();
+        let hits = detect_assays(&r1, &r2, assays, &Default::default(), assays.len());
+        let h = hits
+            .iter()
+            .find(|h| h.spec_file == "drop_seq.spec.yaml")
+            .expect("drop_seq scored");
+        assert_eq!(h.expected_len, 20, "expected len must be CB12+UMI8");
+        assert_eq!(h.observed_len, 20);
     }
 
     #[test]
@@ -1219,7 +1244,11 @@ mod tests {
             let Some((_rid, layout)) = a.structural_read() else {
                 continue;
             };
-            let expected: usize = layout.iter().map(|s| s.len).sum();
+            let expected: usize = crate::libstruct::observed_span(&layout)
+                .unwrap_or(&layout)
+                .iter()
+                .map(|s| s.len)
+                .sum();
             if expected == 0 {
                 continue;
             }

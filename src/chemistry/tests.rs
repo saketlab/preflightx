@@ -122,6 +122,85 @@ fn bulk_wgs_reads_are_not_single_cell() {
 }
 
 #[test]
+fn unmatched_barcode_length_abstains_instead_of_force_fitting() {
+    // 33 bp (sci-RNA-seq3): single-cell, but no 10x or Drop-seq geometry within +/-2 bp.
+    let r1: Vec<Vec<u8>> = (0..200)
+        .map(|i| {
+            let mut v = distinct_cb(i);
+            v.resize(33, b'A');
+            v
+        })
+        .collect();
+    let r2: Vec<Vec<u8>> = (0..200).map(|_| vec![b'C'; 90]).collect();
+    let a = analyze(&r1, &r2, &HashMap::new(), Some(0));
+    assert!(a.is_single_cell, "33bp is a catalogued barcode-read length");
+    assert!(
+        a.scored.is_empty(),
+        "no 10x/Drop-seq candidate should score"
+    );
+    let report = build_report(
+        a,
+        false,
+        200,
+        false,
+        crate::endpanel::classify(&[], None),
+        crate::atacpanel::classify(&[], None),
+    );
+    assert_eq!(report.assay_id, "unknown");
+    assert_eq!(report.confidence, "low");
+    assert!(
+        report.notes.iter().any(|n| n.contains("detect-assay")),
+        "abstention should point at the seqspec tier: {:?}",
+        report.notes
+    );
+    assert!(
+        report.notes.iter().any(|n| n.contains("sci-RNA-seq3")),
+        "abstention should name the matching seqspec geometries: {:?}",
+        report.notes
+    );
+    assert!(report.tool_hints.is_empty(), "no aligner recipe to offer");
+}
+
+#[test]
+fn onlist_miss_overrides_a_coincidental_length_match() {
+    // 30 bp (mCEL-Seq2) shortlists 10x by length, but onlist overlap is near zero.
+    let r1: Vec<Vec<u8>> = (0..200)
+        .map(|i| {
+            let mut v = distinct_cb(i);
+            v.resize(30, b'A');
+            v
+        })
+        .collect();
+    let r2: Vec<Vec<u8>> = (0..200).map(|_| vec![b'C'; 90]).collect();
+    // onlist sharing none of the observed barcodes
+    let mut wl_sets: HashMap<&'static str, HashSet<Vec<u8>>> = HashMap::new();
+    for f in [
+        "3M-february-2018.txt.gz",
+        "3M-3pgex-may-2023.txt.gz",
+        "3M-5pgex-jan-2023.txt.gz",
+    ] {
+        wl_sets.insert(f, HashSet::from([vec![b'T'; 16]]));
+    }
+    let a = analyze(&r1, &r2, &wl_sets, None);
+    assert!(!a.scored.is_empty(), "10x is shortlisted by length");
+    let report = build_report(
+        a,
+        false,
+        200,
+        false,
+        crate::endpanel::classify(&[], None),
+        crate::atacpanel::classify(&[], None),
+    );
+    assert_eq!(report.assay_id, "unknown", "onlist miss must veto the call");
+    assert_eq!(report.confidence, "low");
+    assert!(
+        report.notes.iter().any(|n| n.contains("contradicts")),
+        "note should say the onlist contradicts the geometry: {:?}",
+        report.notes
+    );
+}
+
+#[test]
 fn ambiguous_3p_5p_polarity_is_reported_as_both() {
     let n = 200;
     let mut r1 = Vec::new();

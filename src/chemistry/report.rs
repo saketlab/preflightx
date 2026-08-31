@@ -40,6 +40,33 @@ pub(crate) fn build_report(
     // When the end panel is decisive and contradicts the geometry-only winner's
     // polarity, correct to the best same-family candidate (fixes false-5' on 3'v2).
     let (winner, runner, end_corrected) = apply_end_polarity(&scored, &end, is_single_cell);
+    // ATAC overrides the RNA chemistry call below (assay_id "atac", is_single_cell false).
+    let is_atac = atac.is_atac();
+
+    // Abstain two ways: no geometry within +/-2 bp of R1, or a cached onlist the
+    // barcodes miss.
+    let winner_wl_pct = winner
+        .and_then(|w| w.whitelist.as_ref())
+        .and_then(|wl| wl_scores.get(wl.filename).map(|(_, p)| (wl.filename, *p)));
+    let abstain_reason = if !is_single_cell || is_atac {
+        None
+    } else {
+        match (winner, winner_wl_pct) {
+            (None, _) => Some(unmatched_note(dominant)),
+            (Some(w), Some((file, pct))) if pct < WL_CONTRADICT_PCT => Some(format!(
+                "R1 is {dominant}bp, close enough to {} ({}bp) to shortlist it, but only {pct:.1}% of the distinct R1 barcodes are in {file} — real 10x barcodes hit their onlist almost completely. The onlist contradicts the geometry, so no chemistry is named. Run `preflightx detect-assay` to rank the full seqspec catalogue.",
+                w.display_name,
+                w.r1_expected_len(),
+            )),
+            _ => None,
+        }
+    };
+    let abstain = abstain_reason.is_some();
+    let (winner, runner) = if abstain {
+        (None, None)
+    } else {
+        (winner, runner)
+    };
 
     // 3'v2 and 5'v1 share geometry and onlist; with the TSO one-sided LLR the top
     // two can tie on everything but polarity, which geometry can't recover — so
@@ -64,6 +91,7 @@ pub(crate) fn build_report(
         } else {
             confidence
         };
+    let confidence = if abstain { "low" } else { confidence };
     // Can't claim "high" for a specific polarity when the polarity is unresolved.
     let confidence = if polarity_unresolved && confidence == "high" {
         "medium"
@@ -71,9 +99,6 @@ pub(crate) fn build_report(
         confidence
     };
 
-    // Promoter-enriched reads are a chromatin-accessibility library: ATAC overrides the RNA
-    // chemistry call below (assay_id "atac", is_single_cell false).
-    let is_atac = atac.is_atac();
     let mut notes: Vec<String> = Vec::new();
     if is_atac {
         notes.push(format!(
@@ -132,7 +157,10 @@ pub(crate) fn build_report(
             "Input ended after {n_reads} reads (fewer than the {n_requested} requested) — a short file or a sliced fetch."
         ));
     }
-    if is_single_cell && !is_atac {
+    if let Some(n) = &abstain_reason {
+        notes.push(n.clone());
+    }
+    if is_single_cell && !is_atac && !abstain {
         // Random-barcode chemistries (Drop-seq) have no whitelist to confirm against.
         if winner.map(|w| w.whitelist.is_none()).unwrap_or(false) {
             notes.push(format!(
@@ -171,6 +199,8 @@ pub(crate) fn build_report(
     } else if !is_single_cell {
         assay_id = "none".to_string();
         assay_display = "Not single-cell".to_string();
+    } else if abstain {
+        assay_display = "Single-cell, chemistry not in the 10x/Drop-seq registry".to_string();
     } else if polarity_unresolved {
         if let (Some(w), Some(r)) = (winner, runner) {
             assay_display = format!("{} or {}", w.display_name, r.display_name);
@@ -178,7 +208,7 @@ pub(crate) fn build_report(
     }
     let cb_offset = winner.map(|w| w.r1_cb_offset).unwrap_or(0);
     let cb_len = winner.map(|w| w.r1_cb_len).unwrap_or(0);
-    let umi_offset = winner.map(|w| w.umi_offset()).unwrap_or(0);
+    let umi_offset = winner.map(|w| w.r1_umi_offset).unwrap_or(0);
     let umi_len = winner.map(|w| w.r1_umi_len).unwrap_or(0);
     let whitelist_file =
         winner.and_then(|w| w.whitelist.as_ref().map(|wl| wl.filename.to_string()));
@@ -238,6 +268,13 @@ pub(crate) fn build_report(
             llr_contribution: None,
             conclusion: "Reads hit upstream promoters that RNA cannot reach, so this is chromatin accessibility (ATAC), not an RNA chemistry. Run `preflightx detect-assay` for the ATAC assay.".into(),
         }]
+    } else if abstain {
+        build_unmatched_interpretation(
+            dominant,
+            n_reads,
+            abstain_reason.as_deref().unwrap_or_default(),
+            scored.is_empty(),
+        )
     } else if is_single_cell {
         build_interpretation(
             winner,
@@ -344,11 +381,13 @@ fn apply_end_polarity<'a>(
     if w.id.contains("3prime") == want_3p {
         return (winner, runner, false); // geometry winner already agrees
     }
-    // Best-scored 10x candidate of the wanted polarity, restricted to the winner's own CB+UMI
+    // Match CB+UMI layout, not same_geometry: 3'v3 and 5'v3 ship different onlists.
     let corrected = scored.iter().map(|(s, _)| *s).find(|s| {
         (s.id.contains("3prime") || s.id.contains("5prime"))
             && s.id.contains("3prime") == want_3p
-            && same_geometry(w, s)
+            && s.r1_cb_offset == w.r1_cb_offset
+            && s.r1_cb_len == w.r1_cb_len
+            && s.r1_umi_len == w.r1_umi_len
     });
     match corrected {
         Some(c) if c.id != w.id => (Some(c), Some(w), true),
@@ -509,6 +548,65 @@ fn build_interpretation(
     });
 
     ev
+}
+
+/// Seqspec assays whose barcode-read length matches, comma-joined; empty when none.
+fn seqspec_candidates(dominant: usize) -> String {
+    let names: Vec<&str> = crate::libstruct::sc_geometries_matching(dominant, 2)
+        .iter()
+        .map(|g| g.label())
+        .take(6)
+        .collect();
+    names.join(", ")
+}
+
+/// Note for a read that looks single-cell but matches no ASSAYS geometry.
+fn unmatched_note(dominant: usize) -> String {
+    let cands = seqspec_candidates(dominant);
+    let tail = if cands.is_empty() {
+        "Run `preflightx detect-assay` to rank the full seqspec catalogue.".to_string()
+    } else {
+        format!("The seqspec catalogue does list single-cell assays with a {dominant}bp barcode read ({cands}); run `preflightx detect-assay` to rank them.")
+    };
+    format!(
+        "R1 is {dominant}bp, which matches no 10x or Drop-seq barcode geometry (24-30bp for 10x, 20bp for Drop-seq), \
+         so no chemistry is named rather than force-fitting one. {tail}"
+    )
+}
+
+/// Evidence ledger for an abstention; no_candidate distinguishes "nothing shortlisted"
+/// from "the onlist vetoed it".
+fn build_unmatched_interpretation(
+    dominant: usize,
+    n_reads: usize,
+    reason: &str,
+    no_candidate: bool,
+) -> Vec<Evidence> {
+    let length_conclusion = if no_candidate {
+        format!(
+            "No catalogued 10x (24-28 bp) or Drop-seq (20 bp) geometry sits within ±2 bp of \
+             {dominant} bp, so this tier has no candidate to score."
+        )
+    } else {
+        format!(
+            "{dominant} bp is within ±2 bp of a 10x geometry, so the 10x family was shortlisted — \
+             but length alone cannot confirm it, and the onlist check below refuses it."
+        )
+    };
+    vec![
+        Evidence {
+            signal: "R1 length".into(),
+            observation: format!("{dominant} bp dominant across {n_reads} reads"),
+            llr_contribution: None,
+            conclusion: length_conclusion,
+        },
+        Evidence {
+            signal: "Verdict".into(),
+            observation: "no chemistry named".into(),
+            llr_contribution: None,
+            conclusion: reason.to_string(),
+        },
+    ]
 }
 
 /// Evidence ledger for a library with no single-cell signal: walks the same three

@@ -13,6 +13,9 @@ const P_TSO_BACKGROUND: f64 = 0.01;
 // CB match rates expected when the whitelist is correct vs wrong.
 const P_WL_CORRECT: f64 = 0.70;
 const P_WL_NULL: f64 = 0.01;
+/// Onlist overlap (%) below which the whitelist contradicts the winner; real cell
+/// barcodes hit their own onlist almost completely.
+pub(crate) const WL_CONTRADICT_PCT: f64 = 10.0;
 
 // Per-read (LLR / n_reads) so the thresholds are sample-size-independent.
 const HIGH_LL_PER_READ: f64 = 0.30;
@@ -250,17 +253,13 @@ pub(crate) struct Analysis {
 }
 
 /// Candidate assays for an observed R1 length: exact match, or +/-2 bp for
-/// non-standard cycle counts. Falls back to the whole registry if none fit.
+/// non-standard cycle counts.
+///
 fn candidates_for(dominant: usize) -> Vec<&'static AssaySpec> {
-    let fuzzy: Vec<_> = ASSAYS
+    ASSAYS
         .iter()
         .filter(|s| s.r1_expected_len().abs_diff(dominant) <= 2)
-        .collect();
-    if fuzzy.is_empty() {
-        ASSAYS.iter().collect()
-    } else {
-        fuzzy
-    }
+        .collect()
 }
 
 /// R1 length histogram: the dominant length and the full distribution (descending by count).
@@ -276,7 +275,7 @@ fn len_profile(seqs: &[Vec<u8>]) -> (usize, Vec<(usize, usize)>) {
 }
 
 /// Pick the confidence bucket from the per-read evidence: `high` needs strong total
-/// evidence, a clear lead over the runner-up, *and* a whitelist; `medium` needs any
+/// evidence, a clear lead over the runner-up, and a whitelist; `medium` needs any
 /// positive discrimination (or a single unambiguous candidate); else `low`.
 fn classify_confidence(
     scored: &[(&'static AssaySpec, f64)],
