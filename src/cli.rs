@@ -1,5 +1,5 @@
 //! Native command-line front-end; one analysis-module call per subcommand, then a branch
-//! on `--json`. Not built for wasm (clap and whitelist I/O are native-only).
+//! on --json. Not built for wasm (clap and whitelist I/O are native-only).
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -29,7 +29,7 @@ fn deepen_if_weak<T>(
     Ok(r)
 }
 
-/// Print a cache directory path, as `{"<key>": "<path>"}` under `--json`.
+/// Print a cache directory path, as {"<key>": "<path>"} under --json.
 fn print_dir(json: bool, key: &str, dir: &Path) {
     if json {
         println!("{}", serde_json::json!({ key: dir.display().to_string() }));
@@ -38,7 +38,7 @@ fn print_dir(json: bool, key: &str, dir: &Path) {
     }
 }
 
-/// Accepts `r1,r2` as one positional or `r1 r2` as two; no comma means single-end.
+/// Accepts r1,r2 as one positional or r1 r2 as two; no comma means single-end.
 fn split_pair(r1: String, r2: Option<String>) -> (PathBuf, Option<PathBuf>) {
     match r2 {
         Some(r2) => (r1.into(), Some(r2.into())),
@@ -50,7 +50,7 @@ fn split_pair(r1: String, r2: Option<String>) -> (PathBuf, Option<PathBuf>) {
 }
 
 /// Species + sex from one cDNA pass, resampled at 2x if either comes back weak.
-/// With no cached panels: no species call, and sex falls back to `--species`.
+/// With no cached panels: no species call, and sex falls back to --species.
 fn species_and_sex(
     r1: &Path,
     r2: Option<&Path>,
@@ -84,7 +84,7 @@ fn species_and_sex(
     }
 }
 
-/// Species for the ATAC-vs-RNA panel: the detected call, else `--species`.
+/// Species for the ATAC-vs-RNA panel: the detected call, else --species.
 fn atac_species_hint<'a>(
     sp: Option<&'a species::SpeciesReport>,
     declared: Option<&'a str>,
@@ -108,7 +108,7 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
-    /// Also write a self-contained HTML report to this path (`check` only).
+    /// Also write a self-contained HTML report to this path (check only).
     #[arg(long, global = true, value_name = "PATH")]
     html: Option<PathBuf>,
 
@@ -120,7 +120,7 @@ struct Cli {
     #[arg(long, global = true, default_value_t = 200_000)]
     sex_reads: usize,
 
-    /// `detect-all`: show the full evidence ledger and notes (default: one line per check).
+    /// detect-all: show the full evidence ledger and notes (default: one line per check).
     #[arg(long, global = true)]
     detailed: bool,
 }
@@ -130,7 +130,7 @@ enum Cmd {
     /// Run every check (chemistry + bulk-vs-sc + size + composition) and report.
     Check { r1: PathBuf, r2: Option<PathBuf> },
     /// Detect chemistry + species + sex in one pass. R1/R2 may be two args or a
-    /// single comma-separated `r1.fq,r2.fq`. Single-end input skips chemistry.
+    /// single comma-separated r1.fq,r2.fq. Single-end input skips chemistry.
     DetectAll { r1: String, r2: Option<String> },
     /// 10x Chromium chemistry detection (R1 length + TSO + optional whitelist).
     Chem { r1: PathBuf, r2: PathBuf },
@@ -145,10 +145,10 @@ enum Cmd {
     /// skipped and every cDNA read is scanned (both mates for paired-end bulk).
     Sex { r1: PathBuf, r2: Option<PathBuf> },
     /// Closed-set organism ID from cDNA reads (exact k-mer match vs cached panels).
-    /// Flags a mislabel when the call disagrees with `--species`.
+    /// Flags a mislabel when the call disagrees with --species.
     Species { r1: PathBuf, r2: Option<PathBuf> },
     /// Single-cell vs single-nucleus from cDNA reads (intron + mitochondrial k-mer
-    /// content; alignment-free). Needs the cached nucleus panel (`fetch-panels`).
+    /// content; alignment-free). Needs the cached nucleus panel (fetch-panels).
     Nucleus { r1: PathBuf, r2: Option<PathBuf> },
     /// Generic seqspec-driven detection: rank any catalogued single-cell assay
     /// against the reads (geometry + linker anchors, no whitelist needed).
@@ -162,7 +162,7 @@ enum Cmd {
     FetchWhitelists,
     /// Print the cache directory used for whitelists.
     WhitelistDir,
-    /// Download the species/sex `.spanel` bundle (~130 MB) into the panel cache.
+    /// Download the species/sex .spanel bundle (~130 MB) into the panel cache.
     FetchPanels,
     /// Print the cache directory used for species/sex panels.
     PanelDir,

@@ -1,9 +1,9 @@
-//! Self-contained HTML report renderer, shared by the CLI (`check --html`) and the
-//! browser (`wasm::report_html_json`, the page's "Export report" button).
+//! Self-contained HTML report renderer, shared by the CLI (check --html) and the
+//! browser (wasm::report_html_json, the page's "Export report" button).
 //!
-//! Renders from a `serde_json::Value`, not the typed [`crate::report::FullReport`], so the
+//! Renders from a serde_json::Value, not the typed [crate::report::FullReport], so the
 //! same renderer serves both the CLI's typed report and the browser's client-merged object.
-//! A bare object renders one report; an array renders one `<section>` per element.
+//! A bare object renders one report; an array renders one <section> per element.
 
 use serde_json::Value;
 
@@ -26,8 +26,8 @@ pub fn render(v: &Value) -> String {
     document(&body, &sub)
 }
 
-/// One `<section>` per report. Fields are pulled by name, so this is a third surface to keep
-/// in sync with the report structs (alongside `--json` and each `print()`): a missing or
+/// One <section> per report. Fields are pulled by name, so this is a third surface to keep
+/// in sync with the report structs (alongside --json and each print()): a missing or
 /// typo'd key renders nothing, with no compile error.
 fn section(r: &Value) -> String {
     let chem = r.get("chemistry").filter(|c| !c.is_null());
@@ -115,7 +115,7 @@ fn track_block(chem: Option<&Value>) -> String {
 }
 
 /// The report's stat grid; each scalar is emitted only when present. Add a report field
-/// here to surface it (see the sync note on `section`).
+/// here to surface it (see the sync note on section).
 fn stat_grid(r: &Value, chem: Option<&Value>, not_sc: bool) -> String {
     let mut g = Vec::new();
     if !not_sc {

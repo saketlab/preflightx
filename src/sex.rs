@@ -2,12 +2,12 @@
 //!
 //! Pure analysis: sample the leading reads, count how many hit a Y-linked gene k-mer
 //! (male signal) vs the XIST/Xist k-mer set (female signal), per the bundled
-//! species panel ([`crate::sexpanel`]). The call uses the **Y/XIST hit ratio**, a
+//! species panel ([crate::sexpanel]). The call uses the **Y/XIST hit ratio**, a
 //! depth- and ambient-robust statistic calibrated on 56 human + 17 mouse real samples
-//! (see `experiments/sex_panel/`): true females sit at the ambient floor (ratio ≤ ~0.2),
+//! (see experiments/sex_panel/): true females sit at the ambient floor (ratio ≤ ~0.2),
 //! true males well above it (≥ ~0.5). False-male is the costly error (X/Y gametolog
 //! homology), so a male call additionally needs an absolute Y-hit floor, and marginal
-//! cases honestly report `uncertain`/`unknown` rather than guess.
+//! cases honestly report uncertain/unknown rather than guess.
 
 use anyhow::Result;
 use colored::Colorize;
@@ -82,8 +82,8 @@ struct Tally {
     gene_reads: Vec<u64>, // indexed by SexPanel::genes
 }
 
-/// Accumulate marker hits for one read into `t`. `seen_genes` and
-/// `read_genes` are caller-owned scratch reused across reads to avoid allocation.
+/// Accumulate marker hits for one read into t. seen_genes and
+/// read_genes are caller-owned scratch reused across reads to avoid allocation.
 fn count_read(
     panel: &SexPanel,
     seq: &[u8],
@@ -134,8 +134,8 @@ fn new_tally(panel: &SexPanel) -> Tally {
     }
 }
 
-/// Stream the leading `n_reads` of `cdna` and accumulate Y / XIST marker hits into
-/// `t` (the only I/O). Called once per cDNA read, so paired-end bulk sums both mates.
+/// Stream the leading n_reads of cdna and accumulate Y / XIST marker hits into
+/// t (the only I/O). Called once per cDNA read, so paired-end bulk sums both mates.
 fn scan_into(panel: &SexPanel, cdna: &Path, n_reads: usize, t: &mut Tally) -> Result<()> {
     let mut seen_genes = vec![false; panel.genes.len()];
     let mut read_genes: Vec<u16> = Vec::with_capacity(panel.genes.len());
@@ -145,8 +145,8 @@ fn scan_into(panel: &SexPanel, cdna: &Path, n_reads: usize, t: &mut Tally) -> Re
     Ok(())
 }
 
-/// Score genetic sex from already-sampled in-memory `reads` (shares the read pass
-/// with the species scan in `check`). `panel == None` or an empty (no-sex-pool)
+/// Score genetic sex from already-sampled in-memory reads (shares the read pass
+/// with the species scan in check). panel == None or an empty (no-sex-pool)
 /// panel yields a clean "unavailable" no-call.
 pub fn report_for_reads(panel: Option<&SexPanel>, species: &str, reads: &[Vec<u8>]) -> SexReport {
     let panel = match panel {
@@ -176,7 +176,7 @@ pub fn report_for_reads(panel: Option<&SexPanel>, species: &str, reads: &[Vec<u8
     analyze(panel, species, &t)
 }
 
-/// Pure scoring: turn a [`Tally`] into a verdict + per-gene evidence ledger + notes.
+/// Pure scoring: turn a [Tally] into a verdict + per-gene evidence ledger + notes.
 fn analyze(panel: &SexPanel, species: &str, t: &Tally) -> SexReport {
     let verdict = classify(t.y_hit_reads, t.xist_hit_reads).to_string();
     let conf = confidence(&verdict, t.y_hit_reads, t.xist_hit_reads).to_string();
@@ -272,8 +272,8 @@ fn no_panel(species: &str, note: String) -> SexReport {
     }
 }
 
-/// Infer genetic sex by accumulating Y/XIST hits across one or more cDNA `reads`,
-/// sampling up to `n_reads` leading reads from each. Paired-end bulk passes both
+/// Infer genetic sex by accumulating Y/XIST hits across one or more cDNA reads,
+/// sampling up to n_reads leading reads from each. Paired-end bulk passes both
 /// mates; single-cell passes the single cDNA read.
 pub fn detect_sex_reads(reads: &[&Path], species: &str, n_reads: usize) -> Result<SexReport> {
     let panel = match sexpanel::for_species(species) {
@@ -313,8 +313,8 @@ pub fn detect_sex_reads(reads: &[&Path], species: &str, n_reads: usize) -> Resul
     Ok(report)
 }
 
-/// Genetic sex for `species`, preferring its cached `.spanel` panel and falling
-/// back to an embedded one (human/mouse) — so `sex --species <cached>` works.
+/// Genetic sex for species, preferring its cached .spanel panel and falling
+/// back to an embedded one (human/mouse); so sex --species <cached> works.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn detect_sex_auto_cat(
     r1: &Path,
@@ -338,7 +338,7 @@ pub fn detect_sex(cdna: &Path, species: &str, n_reads: usize) -> Result<SexRepor
     detect_sex_reads(&[cdna], species, n_reads)
 }
 
-/// Infer genetic sex from `r1` and an optional `r2`, auto-selecting which read(s)
+/// Infer genetic sex from r1 and an optional r2, auto-selecting which read(s)
 /// carry cDNA: a fixed-length single-cell barcode/UMI read is skipped, and every
 /// other read is scanned. So single-cell scans the cDNA read; single-end and
 /// paired-end bulk scan their full read(s).
@@ -352,7 +352,7 @@ pub fn detect_sex_auto(
     detect_sex_reads(&reads, species, n_reads)
 }
 
-/// Sample up to `n` reads from the cDNA read(s) of `r1`/`r2` into memory, so the
+/// Sample up to n reads from the cDNA read(s) of r1/r2 into memory, so the
 /// species and sex scans can share one read pass (one download for remote inputs).
 pub fn sample_cdna(r1: &Path, r2: Option<&Path>, n: usize) -> Result<Vec<Vec<u8>>> {
     let mut reads = Vec::new();
@@ -363,8 +363,8 @@ pub fn sample_cdna(r1: &Path, r2: Option<&Path>, n: usize) -> Result<Vec<Vec<u8>
     Ok(reads)
 }
 
-/// The cDNA reads among `r1`/`r2`: drops a read whose length profile is a known
-/// single-cell barcode geometry. Falls back to `r1` if both somehow look like
+/// The cDNA reads among r1/r2: drops a read whose length profile is a known
+/// single-cell barcode geometry. Falls back to r1 if both somehow look like
 /// barcode reads (so a call is still attempted rather than scanning nothing).
 pub(crate) fn cdna_reads<'a>(r1: &'a Path, r2: Option<&'a Path>) -> Result<Vec<&'a Path>> {
     let mut out = Vec::new();
@@ -379,7 +379,7 @@ pub(crate) fn cdna_reads<'a>(r1: &'a Path, r2: Option<&'a Path>) -> Result<Vec<&
     Ok(out)
 }
 
-/// Sample `path` and report whether it is a fixed-length barcode/UMI read.
+/// Sample path and report whether it is a fixed-length barcode/UMI read.
 fn is_barcode_read(path: &Path) -> Result<bool> {
     let (seqs, _) = fastq::sample(path, 512)?;
     if seqs.is_empty() {

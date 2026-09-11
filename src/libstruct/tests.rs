@@ -138,7 +138,7 @@ fn observed_span(layout: &[Segment]) -> Vec<&Segment> {
     super::observed_span(layout).map_or_else(Vec::new, |s| s.iter().collect())
 }
 
-/// Regenerate `docs/assay-geometries.md` from the catalogue. Run on demand:
+/// Regenerate docs/assay-geometries.md from the catalogue. Run on demand:
 ///   cargo test gen_assay_docs -- --ignored
 #[test]
 #[ignore = "doc generator; run explicitly to refresh docs/assay-geometries.md"]
@@ -291,7 +291,7 @@ fn gen_assay_docs() {
     eprintln!("wrote {path}");
 }
 
-/// Regenerate `web/assay-structures.html`, a colour-coded visual of every
+/// Regenerate web/assay-structures.html, a colour-coded visual of every
 /// assay's barcode-read structure (also deployed at preflightx.saketlab.org).
 /// Run on demand:
 ///   cargo test gen_assay_html -- --ignored
@@ -340,7 +340,7 @@ fn gen_assay_html() {
     }
 
     // Barcoding mechanism. Geometry alone can't separate droplet from single-barcode
-    // well-plates, or microwell from split-pool, so it's curated; unmapped specs fall to `Other`.
+    // well-plates, or microwell from split-pool, so it's curated; unmapped specs fall to Other.
     #[derive(PartialEq, Eq, Clone, Copy)]
     enum Mechanism {
         Droplet,
@@ -350,7 +350,7 @@ fn gen_assay_html() {
         PlateNoBarcode,
         Other,
     }
-    // Keyed by spec filename without the `.spec.yaml` suffix.
+    // Keyed by spec filename without the .spec.yaml suffix.
     fn mechanism_of(spec: &str) -> Mechanism {
         use Mechanism::*;
         match spec {
@@ -437,7 +437,7 @@ fn gen_assay_html() {
     // assays, excluded from the visual so the catalogue reads clean.
     const PLACEHOLDER_SPECS: &[&str] = &[
         "template.spec.yaml",
-        "tang2009.spec.yaml", // upstream `name:` is the bogus "10x Genomics"
+        "tang2009.spec.yaml", // upstream name: is the bogus "10x Genomics"
         "10xv3_scrnaseq_element_adept_truseq_dual.spec.yaml", // name: "Example assay"
         "10xv3_scrnaseq_illumina_truseq_dual.spec.yaml", // name: "Example assay"
     ];

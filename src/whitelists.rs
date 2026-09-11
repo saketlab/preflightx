@@ -167,7 +167,7 @@ pub fn fetch_all() -> Result<()> {
             && fs::metadata(dir.join(wl.filename))?.len() > 1_000_000;
         any_failed |= !fetch_into(&client, &dir, wl.filename, wl.url, cached)?;
     }
-    // Non-10x barcode onlists for `detect-assay`: small plain-text lists.
+    // Non-10x barcode onlists for detect-assay: small plain-text lists.
     for src in crate::assaydetect::onlist_fetch_list() {
         let cached = dir.join(src.cache_name).exists();
         any_failed |= !fetch_into(&client, &dir, src.cache_name, src.url, cached)?;
@@ -186,8 +186,8 @@ pub fn fetch_all() -> Result<()> {
     Ok(())
 }
 
-/// Download `name` into `dir` unless already `cached`, printing one status line.
-/// Returns `false` only on a download failure (so callers can track `any_failed`).
+/// Download name into dir unless already cached, printing one status line.
+/// Returns false only on a download failure (so callers can track any_failed).
 fn fetch_into(
     client: &reqwest::blocking::Client,
     dir: &Path,

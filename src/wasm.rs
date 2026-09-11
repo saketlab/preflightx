@@ -1,8 +1,8 @@
-//! Browser entry points (wasm-bindgen). Uploaded bytes go into [`fastq::vfs`]; the analysis
+//! Browser entry points (wasm-bindgen). Uploaded bytes go into [fastq::vfs]; the analysis
 //! functions run unmodified against a synthetic path.
 //!
-//! No whitelist cache here. The front-end calls [`needed_whitelists`], fetches each, and
-//! stashes it via [`load_whitelist`]; without them chemistry caps at medium confidence.
+//! No whitelist cache here. The front-end calls [needed_whitelists], fetches each, and
+//! stashes it via [load_whitelist]; without them chemistry caps at medium confidence.
 
 use std::path::Path;
 use wasm_bindgen::prelude::*;
@@ -13,7 +13,7 @@ const R1: &str = "r1";
 const R2: &str = "r2";
 pub(crate) const WL_DIR: &str = "wl";
 
-/// Routes Rust panics to the JS console; runs inside `init()`.
+/// Routes Rust panics to the JS console; runs inside init().
 #[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
@@ -27,7 +27,7 @@ fn err_to_js(e: anyhow::Error) -> JsValue {
     JsValue::from_str(&format!("{e:#}"))
 }
 
-/// Some(cache) once any onlist has been stashed via [`load_whitelist`].
+/// Some(cache) once any onlist has been stashed via [load_whitelist].
 fn wl_cache() -> Option<&'static Path> {
     if fastq::vfs::has_prefix(&format!("{WL_DIR}/")) {
         Some(Path::new(WL_DIR))
@@ -36,7 +36,7 @@ fn wl_cache() -> Option<&'static Path> {
     }
 }
 
-/// Drops the read buffers after `f`; loaded onlists survive.
+/// Drops the read buffers after f; loaded onlists survive.
 fn with_pair<T>(r1: Vec<u8>, r2: Vec<u8>, f: impl FnOnce() -> T) -> T {
     fastq::vfs::put(R1, r1);
     fastq::vfs::put(R2, r2);
@@ -47,7 +47,7 @@ fn with_pair<T>(r1: Vec<u8>, r2: Vec<u8>, f: impl FnOnce() -> T) -> T {
 }
 
 /// Whitelist filenames matching the pair's R1 geometry. The front-end fetches each and
-/// passes it back through [`load_whitelist`].
+/// passes it back through [load_whitelist].
 #[wasm_bindgen]
 pub fn needed_whitelists(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, JsValue> {
     let files = with_pair(r1, r2, || {
@@ -56,27 +56,27 @@ pub fn needed_whitelists(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<Str
     to_js(&files.map_err(err_to_js)?)
 }
 
-/// Stash a fetched onlist (`.txt.gz` or plain). Cached across runs, so fetched once.
+/// Stash a fetched onlist (.txt.gz or plain). Cached across runs, so fetched once.
 #[wasm_bindgen]
 pub fn load_whitelist(name: &str, bytes: Vec<u8>) {
     fastq::vfs::put(&format!("{WL_DIR}/{name}"), bytes);
 }
 
 /// Inject a k-mer panel; no panel cache dir exists on wasm, so without this the sc-vs-sn
-/// and 3'/5' verdicts stay `None`. `kind` is "endpanel" or "nucpanel". Call before [`check`].
+/// and 3'/5' verdicts stay None. kind is "endpanel" or "nucpanel". Call before [check].
 #[wasm_bindgen]
 pub fn load_panel(kind: &str, bytes: Vec<u8>) {
     crate::kmerpanel::store_panel(kind, String::from_utf8_lossy(&bytes).into_owned());
 }
 
-/// Onlists `detect_assay` can score. The front-end fetches each `url` and stashes it via
-/// [`load_whitelist`] under `cache_name`.
+/// Onlists detect_assay can score. The front-end fetches each url and stashes it via
+/// [load_whitelist] under cache_name.
 #[wasm_bindgen]
 pub fn onlist_sources() -> Result<String, JsValue> {
     to_js(&assaydetect::onlist_fetch_list())
 }
 
-/// Empty `r2` means single-end; `f` gets a flag for whether R2 is present.
+/// Empty r2 means single-end; f gets a flag for whether R2 is present.
 fn with_reads<T>(r1: Vec<u8>, r2: Vec<u8>, f: impl FnOnce(bool) -> T) -> T {
     fastq::vfs::put(R1, r1);
     let has_r2 = !r2.is_empty();
@@ -91,7 +91,7 @@ fn with_reads<T>(r1: Vec<u8>, r2: Vec<u8>, f: impl FnOnce(bool) -> T) -> T {
     out
 }
 
-/// Full report. `r1`/`r2` are raw uploaded bytes (gzip auto-detected); empty `r2` is
+/// Full report. r1/r2 are raw uploaded bytes (gzip auto-detected); empty r2 is
 /// single-end.
 #[wasm_bindgen]
 pub fn check(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, JsValue> {
@@ -195,8 +195,8 @@ pub fn sex_species() -> Result<String, JsValue> {
     to_js(&panels)
 }
 
-/// Genetic-sex inference (Y-gene + XIST k-mers). Separate from [`check`] so the front-end
-/// runs it on request. Y/XIST are sparse, so `sex_reads` samples deeper (native 200000).
+/// Genetic-sex inference (Y-gene + XIST k-mers). Separate from [check] so the front-end
+/// runs it on request. Y/XIST are sparse, so sex_reads samples deeper (native 200000).
 #[wasm_bindgen]
 pub fn sex(r1: Vec<u8>, r2: Vec<u8>, species: &str, sex_reads: usize) -> Result<String, JsValue> {
     let result = with_reads(r1, r2, |has_r2| {
@@ -226,7 +226,7 @@ pub fn sex_with_panel(
     to_js(&result?)
 }
 
-/// Same renderer as the CLI's `check --html`.
+/// Same renderer as the CLI's check --html.
 #[wasm_bindgen]
 pub fn report_html_json(json: &str) -> Result<String, JsValue> {
     let v: serde_json::Value =
@@ -251,7 +251,7 @@ pub fn describe(assay: &str) -> Result<String, JsValue> {
     }
 }
 
-/// Structured library description matching CLI `describe --json`.
+/// Structured library description matching CLI describe --json.
 #[wasm_bindgen]
 pub fn describe_json(assay: &str) -> Result<String, JsValue> {
     match assaydetect::find_assay(assay) {

@@ -1,17 +1,17 @@
-//! Shared machinery for the cache-hosted k-mer panels ([`crate::endpanel`],
-//! [`crate::nucpanel`]): parse a `#k` header + tab-separated `kmer \t gene \t category`
+//! Shared machinery for the cache-hosted k-mer panels ([crate::endpanel],
+//! [crate::nucpanel]): parse a #k header + tab-separated kmer \t gene \t category
 //! rows into a 2-bit lookup holding both strand orientations, and load/merge every
-//! `*.<ext>` from the panel cache dir. Each panel module supplies only its category
+//! *.<ext> from the panel cache dir. Each panel module supplies only its category
 //! enum, a row-category parser, and its own scoring.
 
 use rustc_hash::FxHashMap;
 
 use crate::sexpanel::encode_kmer_both_strands;
 
-/// Fallback k when a panel omits its `#k` header (all shipped panels are k=50).
+/// Fallback k when a panel omits its #k header (all shipped panels are k=50).
 pub const DEFAULT_K: usize = 50;
 
-/// A merged k-mer lookup (both orientations) keyed to a per-panel category `T`, plus the
+/// A merged k-mer lookup (both orientations) keyed to a per-panel category T, plus the
 /// panel's k.
 pub struct KmerPanel<T> {
     pub map: FxHashMap<u128, T>,
@@ -19,8 +19,8 @@ pub struct KmerPanel<T> {
 }
 
 impl<T: Copy + PartialEq> KmerPanel<T> {
-    /// Load and merge every `*.{ext}` panel in the cache dir. `parse_cat` maps the row's
-    /// category column to `T` (returning `None` skips the row). Missing dir / no files /
+    /// Load and merge every *.{ext} panel in the cache dir. parse_cat maps the row's
+    /// category column to T (returning None skips the row). Missing dir / no files /
     /// wasm → an empty panel (the caller's verdict degrades to "unknown").
     pub fn load(ext: &str, parse_cat: impl Fn(&str) -> Option<T>) -> KmerPanel<T> {
         let mut map = FxHashMap::default();
@@ -49,7 +49,7 @@ impl<T: Copy + PartialEq> KmerPanel<T> {
         self.map.is_empty()
     }
 
-    /// Load panels grouped by their `#species` header (lowercased), merging same-species
+    /// Load panels grouped by their #species header (lowercased), merging same-species
     /// files. Panels lacking the header group under the empty key. Used where the caller
     /// must pick the panel matching a detected organism instead of merging all species.
     pub fn load_by_species(
@@ -74,9 +74,9 @@ impl<T: Copy + PartialEq> KmerPanel<T> {
     }
 }
 
-/// Text of every panel of this `ext`. Native: read every `*.{ext}` file in the panel
+/// Text of every panel of this ext. Native: read every *.{ext} file in the panel
 /// cache dir (sorted). Wasm (no filesystem): whatever the front-end injected via
-/// [`store_panel`] — so the browser build must call `load_panel(ext, bytes)` before any
+/// [store_panel]; so the browser build must call load_panel(ext, bytes) before any
 /// classify. Missing source yields an empty list (verdict degrades to "unknown").
 #[cfg(not(target_arch = "wasm32"))]
 fn panel_texts(ext: &str) -> Vec<String> {
@@ -114,7 +114,7 @@ pub mod wasm_store {
         static PANELS: RefCell<HashMap<String, Vec<String>>> = RefCell::new(HashMap::new());
     }
 
-    /// Append one panel's text under `ext` (multiple files of the same ext merge, as on
+    /// Append one panel's text under ext (multiple files of the same ext merge, as on
     /// native). Idempotent-ish: re-injecting the same ext accumulates, so the front-end
     /// should inject each panel once per page load.
     pub fn add(ext: &str, text: String) {
@@ -132,7 +132,7 @@ pub mod wasm_store {
 }
 
 /// Inject a panel's raw text for the wasm build (no-op signature kept simple). The
-/// front-end fetches each `*.endpanel`/`*.nucpanel` and hands the bytes here.
+/// front-end fetches each *.endpanel/*.nucpanel and hands the bytes here.
 #[cfg(target_arch = "wasm32")]
 pub fn store_panel(ext: &str, text: String) {
     wasm_store::add(ext, text);
@@ -150,7 +150,7 @@ fn header_species(text: &str) -> Option<String> {
     })
 }
 
-/// Fold one panel's rows into `map`, storing both strand orientations so a raw read
+/// Fold one panel's rows into map, storing both strand orientations so a raw read
 /// window matches regardless of cDNA strand. A k-mer present with a *different*
 /// category is a cross-panel conflict and is dropped (trustworthy as neither).
 fn merge<T: Copy + PartialEq>(

@@ -1,15 +1,15 @@
 use super::*;
 use crate::testutil::write_fastq;
 
-/// A distinct 16-bp cell barcode for index `i` (base-4 encoding of `i`).
+/// A distinct 16-bp cell barcode for index i (base-4 encoding of i).
 fn distinct_cb(i: usize) -> Vec<u8> {
     (0..16)
         .map(|j| b"ACGT"[(i / 4usize.pow(j as u32)) % 4] as char as u8)
         .collect()
 }
 
-/// `n` synthetic 10x R1 reads (16-bp CB + 12-bp UMI = 28 bp) and matching R2 reads
-/// (TSO at the start when `tso` is set). Returns `(r1, r2, cb_set)`.
+/// n synthetic 10x R1 reads (16-bp CB + 12-bp UMI = 28 bp) and matching R2 reads
+/// (TSO at the start when tso is set). Returns (r1, r2, cb_set).
 #[allow(clippy::type_complexity)]
 fn tenx_v3_reads(n: usize, tso: bool) -> (Vec<Vec<u8>>, Vec<Vec<u8>>, HashSet<Vec<u8>>) {
     let mut r1 = Vec::with_capacity(n);

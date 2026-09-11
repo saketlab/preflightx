@@ -50,7 +50,7 @@ pub struct AssayHit {
     pub onlist_overlap: Vec<(String, f64)>,
 }
 
-/// Full generic-detection report for the `detect-assay` subcommand.
+/// Full generic-detection report for the detect-assay subcommand.
 #[derive(Debug, Clone, Serialize)]
 pub struct DetectReport {
     pub reads_sampled: usize,
@@ -96,7 +96,7 @@ pub fn detect(r1: &Path, r2: &Path, n: usize) -> Result<DetectReport> {
     })
 }
 
-/// A one-line catalogue entry for the `assays` subcommand.
+/// A one-line catalogue entry for the assays subcommand.
 #[derive(Debug, Clone, Serialize)]
 pub struct CatalogueEntry {
     pub spec_file: String,
@@ -426,7 +426,7 @@ fn onlist_source(spec_file: &str, onlist_filename: &str) -> Option<OnlistSource>
         .map(|(_, _, src)| *src)
 }
 
-/// Every distinct onlist source preflightx can fetch (for `fetch-whitelists`).
+/// Every distinct onlist source preflightx can fetch (for fetch-whitelists).
 pub fn onlist_fetch_list() -> Vec<OnlistSource> {
     let mut seen = std::collections::HashSet::new();
     ONLIST_SOURCES
@@ -558,7 +558,7 @@ fn onlist_overlap_llr(
     (total, per_seg)
 }
 
-/// Onlist segments for `a`, offset to align with the reads `score_obs` sees.
+/// Onlist segments for a, offset to align with the reads score_obs sees.
 /// Offsets pass through: both count from the first barcode/UMI.
 /// Keeps only segments with a hosted onlist, re-keyed to the cache name.
 fn resolved_onlist_segs(a: &Assay, layout: &[Segment]) -> Vec<OnlistSeg> {
@@ -744,7 +744,7 @@ pub fn describe(a: &Assay) -> String {
     s
 }
 
-/// Structured form of [`describe`] for `--json`.
+/// Structured form of [describe] for --json.
 pub fn describe_json(a: &Assay) -> serde_json::Value {
     let structural = a.structural_read().map(|(rid, layout)| {
         let mut offset = 0usize;
@@ -1187,10 +1187,10 @@ mod tests {
 
     #[test]
     fn handcoded_10x_geometry_matches_seqspec() {
-        // The 10x family is defined twice — as hand-coded `AssaySpec`s in assay.rs and
-        // as vendored seqspec YAML — so this pins the two together: a future edit to
+        // The 10x family is defined twice; as hand-coded AssaySpecs in assay.rs and
+        // as vendored seqspec YAML; so this pins the two together: a future edit to
         // either side that changes a barcode/UMI length will fail here instead of
-        // making `chem` and `detect-assay` silently disagree on the same input.
+        // making chem and detect-assay silently disagree on the same input.
         use crate::assay::ASSAYS;
         let pairs = [
             ("10x_3prime_v1", "10x_rna_v1.spec.yaml"),

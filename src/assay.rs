@@ -29,7 +29,7 @@ pub struct AssaySpec {
     pub r2_anchors: &'static [AnchorMotif],
     /// Per-tool hints that cannot be derived from geometry (e.g. kb protocol names,
     /// cellranger chemistry strings). STARsolo flags are generated from geometry via
-    /// `starsolo_hint()` and are not stored here.
+    /// starsolo_hint() and are not stored here.
     pub tool_hints: &'static [(&'static str, &'static str)],
 }
 

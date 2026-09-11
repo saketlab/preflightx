@@ -15,37 +15,37 @@ pub struct FullReport {
     pub r1: String,
     pub r2: Option<String>,
     pub chemistry: Option<ChemReport>,
-    /// Fallback seqspec ranking, run only when `chemistry` finds no 10x/Drop-seq match.
+    /// Fallback seqspec ranking, run only when chemistry finds no 10x/Drop-seq match.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assay_detection: Option<DetectReport>,
     pub bulk_vs_sc: BulkReport,
     pub size: SizeReport,
     pub composition: CompositionReport,
-    /// `None` when no species panels are cached; serializes to no `species` key.
+    /// None when no species panels are cached; serializes to no species key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub species: Option<SpeciesReport>,
-    /// `None` when sex inference was not requested; serializes to no `sex` key.
+    /// None when sex inference was not requested; serializes to no sex key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sex: Option<SexReport>,
-    /// Single-cell vs single-nucleus (intron/exon + mito k-mer content). `None` when the
+    /// Single-cell vs single-nucleus (intron/exon + mito k-mer content). None when the
     /// nucleus panel isn't available (e.g. wasm before injection / no cache).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nucleus: Option<NucReport>,
-    /// 3'/5' transcript-end bias. `None` when the end panel isn't available.
+    /// 3'/5' transcript-end bias. None when the end panel isn't available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end: Option<EndReport>,
     pub classification: Classification,
 }
 
-/// `bulk_vs_sc` + `nucleus` + `chemistry`, rolled into one call.
+/// bulk_vs_sc + nucleus + chemistry, rolled into one call.
 #[derive(Serialize, Default, Debug, Clone, PartialEq)]
 pub struct Classification {
     /// "bulk" | "single-cell" | "single-nucleus" | "single-undetermined".
-    /// Single ATAC is always "single-undetermined"; see [`Classification::derive`].
+    /// Single ATAC is always "single-undetermined"; see [Classification::derive].
     pub library: String,
     /// "RNA" | "ATAC" | "unknown".
     pub modality: String,
-    /// e.g. "10x 3' v3". `None` for bulk.
+    /// e.g. "10x 3' v3". None for bulk.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chemistry: Option<String>,
     /// e.g. "single-nucleus RNA · 10x 3' v3".
@@ -154,15 +154,15 @@ impl Classification {
     }
 }
 
-/// Trimmed report for the `detect-all` subcommand: chemistry + species + sex only.
+/// Trimmed report for the detect-all subcommand: chemistry + species + sex only.
 #[derive(Serialize)]
 pub struct DetectAllReport {
     pub r1: String,
     pub r2: Option<String>,
-    /// `None` for single-end input (chemistry needs both mates).
+    /// None for single-end input (chemistry needs both mates).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chemistry: Option<ChemReport>,
-    /// `None` when no species panels are cached.
+    /// None when no species panels are cached.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub species: Option<SpeciesReport>,
     pub sex: SexReport,
@@ -188,7 +188,7 @@ impl DetectAllReport {
         println!();
     }
 
-    /// Default `detect-all` view; `--detailed` switches to [`print`].
+    /// Default detect-all view; --detailed switches to [print].
     pub fn print_summary(&self) {
         let conf = |c: &str| match c {
             "high" => c.green(),
@@ -224,7 +224,7 @@ impl DetectAllReport {
         );
     }
 
-    /// JSON counterpart of [`print_summary`]; `--detailed` serializes the full report.
+    /// JSON counterpart of [print_summary]; --detailed serializes the full report.
     pub fn summary_json(&self) -> serde_json::Value {
         use serde_json::json;
         json!({
@@ -247,7 +247,7 @@ impl DetectAllReport {
     }
 }
 
-/// Nucleus and end verdicts, each `None` when its panel isn't loaded. No FASTQ pass
+/// Nucleus and end verdicts, each None when its panel isn't loaded. No FASTQ pass
 /// without a panel.
 pub fn panel_verdicts(
     r1: &std::path::Path,
@@ -285,7 +285,7 @@ impl FullReport {
         Ok((chem, assay))
     }
 
-    /// Via `serde_json::Value`, so [`crate::reporthtml`] stays the only renderer.
+    /// Via serde_json::Value, so [crate::reporthtml] stays the only renderer.
     pub fn to_html(&self) -> String {
         crate::reporthtml::render(&serde_json::to_value(self).unwrap_or(serde_json::Value::Null))
     }
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn omits_sex_when_not_requested() {
-        // A `None` sex serializes to a report with no `sex` key.
+        // A None sex serializes to a report with no sex key.
         let json = serde_json::to_string(&minimal(None)).unwrap();
         assert!(
             !json.contains("\"sex\""),

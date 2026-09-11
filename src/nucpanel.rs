@@ -1,12 +1,12 @@
 //! Single-cell vs single-nucleus k-mer panels: an alignment-free read of whether a
 //! library sequenced whole cells or isolated nuclei.
 //!
-//! Two signatures, both read off R2: `intron_frac = n_intron / (n_intron + n_exon)`
-//! (nuclei carry unspliced pre-mRNA, high -> nucleus) and `mito_pct = n_mito /
-//! reads_scanned` (nuclei are stripped of cytoplasmic mito, high -> cell). Each k-mer is
-//! anchored to one category (`intron`/`exon`/`mito`) of a ubiquitous gene (or MT),
-//! deduped so a hit is unambiguous. Fetched by `fetch-panels` into
-//! [`crate::whitelists::panel_cache_dir`]; no cache -> `unknown`.
+//! Two signatures, both read off R2: intron_frac = n_intron / (n_intron + n_exon)
+//! (nuclei carry unspliced pre-mRNA, high -> nucleus) and mito_pct = n_mito /
+//! reads_scanned (nuclei are stripped of cytoplasmic mito, high -> cell). Each k-mer is
+//! anchored to one category (intron/exon/mito) of a ubiquitous gene (or MT),
+//! deduped so a hit is unambiguous. Fetched by fetch-panels into
+//! [crate::whitelists::panel_cache_dir]; no cache -> unknown.
 
 use rustc_hash::FxHashMap;
 use serde::Serialize;
@@ -22,7 +22,7 @@ pub enum Region {
     Mito,
 }
 
-/// Map the `.nucpanel` category column to a [`Region`].
+/// Map the .nucpanel category column to a [Region].
 fn parse_region(cat: &str) -> Option<Region> {
     match cat {
         "intron" => Some(Region::Intron),
@@ -58,18 +58,18 @@ pub struct NucReport {
     pub notes: Vec<String>,
 }
 
-/// The `.nucpanel` lookup, loaded from the panel cache dir once.
+/// The .nucpanel lookup, loaded from the panel cache dir once.
 fn loaded() -> &'static KmerPanel<Region> {
     static R: OnceLock<KmerPanel<Region>> = OnceLock::new();
     R.get_or_init(|| KmerPanel::load("nucpanel", parse_region))
 }
 
-/// Whether any nucleus panel is loaded (else `classify` degrades to "unknown").
+/// Whether any nucleus panel is loaded (else classify degrades to "unknown").
 pub fn have_panels() -> bool {
     !loaded().is_empty()
 }
 
-/// Classify single-cell vs single-nucleus from sampled cDNA (R2) `reads`. Pure: no I/O.
+/// Classify single-cell vs single-nucleus from sampled cDNA (R2) reads. Pure: no I/O.
 pub fn classify(reads: &[Vec<u8>]) -> NucReport {
     let p = loaded();
     classify_with(reads, &p.map, p.k)
@@ -158,7 +158,7 @@ fn classify_with(reads: &[Vec<u8>], panel: &FxHashMap<u128, Region>, k: usize) -
 /// Combine the two signals, requiring them to AGREE: mito-depleted -> nuclei; very high
 /// mito -> cell; high mito with low intron -> cell; high mito with non-low intron ->
 /// ambiguous (conflict); mid mito -> intron breaks the tie or abstains. The panel-hit
-/// floor is checked first so a non-human/mouse sample reads `unknown`, not a false nucleus.
+/// floor is checked first so a non-human/mouse sample reads unknown, not a false nucleus.
 fn decide(
     gene_hits: usize,
     total_panel_hits: usize,

@@ -17,13 +17,13 @@ pub fn same_species(a: &str, b: &str) -> bool {
 pub struct SpeciesReport {
     pub declared: Option<String>,
     pub called: String,
-    /// "high" | "medium" | "low" — how much to trust `called`. Always "low" when
-    /// `called == "unknown"`.
+    /// "high" | "medium" | "low"; how much to trust called. Always "low" when
+    /// called == "unknown".
     pub confidence: String,
-    /// True when the runner-up is within `AMBIG_FRACTION` of the top species; `called`
+    /// True when the runner-up is within AMBIG_FRACTION of the top species; called
     /// is still the top but the tie should be treated as suspect.
     pub ambiguous: bool,
-    /// Why `called == "unknown"` (below hit floor / no catalogue); None when called.
+    /// Why called == "unknown" (below hit floor / no catalogue); None when called.
     pub abstained_reason: Option<String>,
     pub called_hit_reads: u64,
     pub called_hit_fraction: f64,
@@ -46,7 +46,7 @@ mod detect {
     const MIN_HIT_FRACTION: f64 = 0.0005;
     // Hit-fraction floor for "high" (with a clear lead); clearing only MIN is "low".
     const HIGH_HIT_FRACTION: f64 = 0.005; // 10x the calling floor
-                                          // Runner-up within this fraction of the top's hit-reads -> `ambiguous`.
+                                          // Runner-up within this fraction of the top's hit-reads -> ambiguous.
     const AMBIG_FRACTION: f64 = 0.80;
     // Top must lead the runner-up by at least this ratio for "high".
     const HIGH_LEAD_RATIO: f64 = 2.0;
@@ -61,7 +61,7 @@ mod detect {
     }
 
     /// Bucket the call's trustworthiness from its absolute hit-fraction and its lead
-    /// over the runner-up. `unknown`/ambiguous calls never reach "high".
+    /// over the runner-up. unknown/ambiguous calls never reach "high".
     fn classify_confidence(
         top_c: u64,
         runner_c: u64,
@@ -81,8 +81,8 @@ mod detect {
         }
     }
 
-    /// Per-species hit-read counts over `reads`: each read votes at most once per species.
-    /// The shared scan seam for both the exon (`.spanel`) and intron (`.snpanel`) channels.
+    /// Per-species hit-read counts over reads: each read votes at most once per species.
+    /// The shared scan seam for both the exon (.spanel) and intron (.snpanel) channels.
     pub(crate) fn count_hits(
         reads: &[Vec<u8>],
         k: usize,
@@ -118,7 +118,7 @@ mod detect {
         (counts, scanned, reads_with_hit)
     }
 
-    /// Top and runner-up from per-species counts: `(top_idx, top_count, runner_name, runner_count)`.
+    /// Top and runner-up from per-species counts: (top_idx, top_count, runner_name, runner_count).
     fn rank(counts: &[u64], name_of: impl Fn(u16) -> String) -> (u16, u64, Option<String>, u64) {
         let mut ranked: Vec<(u16, u64)> = counts
             .iter()
@@ -255,8 +255,8 @@ mod detect {
         top_c >= SN_MIN_HITS && (runner_c == 0 || top_c as f64 >= SN_LEAD_RATIO * runner_c as f64)
     }
 
-    /// Rescue a weak exon species call with a decisive intron-channel call. `exon` is the
-    /// [`detect_species`] result over the same reads; high-confidence exon calls and an empty
+    /// Rescue a weak exon species call with a decisive intron-channel call. exon is the
+    /// [detect_species] result over the same reads; high-confidence exon calls and an empty
     /// intron catalogue pass through untouched.
     pub fn apply_intron_channel(
         exon: SpeciesReport,
@@ -368,7 +368,7 @@ mod detect {
 pub use detect::{apply_intron_channel, detect_species, detect_species_auto};
 
 impl SpeciesReport {
-    /// No catalogued species cleared the hit threshold — off-panel, or too few reads.
+    /// No catalogued species cleared the hit threshold; off-panel, or too few reads.
     pub fn is_unknown(&self) -> bool {
         self.called == "unknown"
     }

@@ -1,13 +1,13 @@
-//! Chemistry-detection report assembly: build the `ChemReport` from an `Analysis`
-//! and render the human-readable interpretation via `print()`.
+//! Chemistry-detection report assembly: build the ChemReport from an Analysis
+//! and render the human-readable interpretation via print().
 
 use super::*;
 use crate::assay::{AssaySpec, TSO_PRESENT};
 use colored::{ColoredString, Colorize};
 use std::collections::HashMap;
 
-/// Turn a scored `Analysis` into the serializable report. `n_requested` is the
-/// read budget asked for; `early_stop` is true when SPRT decided before reaching it.
+/// Turn a scored Analysis into the serializable report. n_requested is the
+/// read budget asked for; early_stop is true when SPRT decided before reaching it.
 pub(crate) fn build_report(
     a: Analysis,
     swapped: bool,
@@ -69,7 +69,7 @@ pub(crate) fn build_report(
     };
 
     // 3'v2 and 5'v1 share geometry and onlist; with the TSO one-sided LLR the top
-    // two can tie on everything but polarity, which geometry can't recover — so
+    // two can tie on everything but polarity, which geometry can't recover; so
     // report both, unless the transcript-end panel resolved it.
     let gap = scored.first().map(|(_, s)| *s).unwrap_or(0.0)
         - scored.get(1).map(|(_, s)| *s).unwrap_or(0.0);
@@ -395,7 +395,7 @@ fn apply_end_polarity<'a>(
     }
 }
 
-/// Build the evidence ledger explaining why `winner` was chosen, signal by signal
+/// Build the evidence ledger explaining why winner was chosen, signal by signal
 /// (length -> candidates, TSO -> polarity, whitelist -> version, then the verdict).
 #[allow(clippy::too_many_arguments)]
 fn build_interpretation(

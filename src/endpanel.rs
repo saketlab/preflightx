@@ -3,14 +3,14 @@
 //!
 //! Each panel k-mer is anchored to exactly one end of one ubiquitously-expressed
 //! transcript, deduped so a hit is unambiguously the 5' or 3' end of a gene. Stream R2,
-//! count `n5` vs `n3`, `r = n3/(n3+n5)`: high -> 3', low -> 5', roughly even ->
-//! full-length. Panels are per-species (`#species` header) and selected by the detected
+//! count n5 vs n3, r = n3/(n3+n5): high -> 3', low -> 5', roughly even ->
+//! full-length. Panels are per-species (#species header) and selected by the detected
 //! organism; a species with no cached panel abstains rather than score against another
-//! organism's k-mers. Fetched by `fetch-panels` into
-//! [`crate::whitelists::panel_cache_dir`]; no cache -> "unknown".
+//! organism's k-mers. Fetched by fetch-panels into
+//! [crate::whitelists::panel_cache_dir]; no cache -> "unknown".
 //!
 //! Calibrated on whole-cell scRNA; single-nucleus reads spread into introns/gene bodies,
-//! so the ratio is less reliable there (the geometry+whitelist `assay_id` is authoritative).
+//! so the ratio is less reliable there (the geometry+whitelist assay_id is authoritative).
 
 use rustc_hash::FxHashMap;
 use serde::Serialize;
@@ -26,7 +26,7 @@ pub enum End {
     Three, // 3' end (polyA-proximal)
 }
 
-/// Map the `.endpanel` category column to an [`End`].
+/// Map the .endpanel category column to an [End].
 fn parse_end(cat: &str) -> Option<End> {
     match cat {
         "5p" => Some(End::Five),
@@ -59,26 +59,26 @@ pub struct EndReport {
 }
 
 impl EndReport {
-    /// True when the panel gave a decisive polarity (3' or 5') — usable to correct a
+    /// True when the panel gave a decisive polarity (3' or 5'); usable to correct a
     /// geometry-only chemistry call.
     pub fn is_decisive(&self) -> bool {
         (self.end == "3'" || self.end == "5'") && self.confidence != "low"
     }
 }
 
-/// The `.endpanel` lookups, one per species (`#species` header), loaded once.
+/// The .endpanel lookups, one per species (#species header), loaded once.
 fn species_panels() -> &'static HashMap<String, KmerPanel<End>> {
     static R: OnceLock<HashMap<String, KmerPanel<End>>> = OnceLock::new();
     R.get_or_init(|| KmerPanel::load_by_species("endpanel", parse_end))
 }
 
-/// Whether any end panel is cached (else `classify` returns a clean "unknown").
+/// Whether any end panel is cached (else classify returns a clean "unknown").
 pub fn have_panels() -> bool {
     !species_panels().is_empty()
 }
 
-/// The panel matching `species` (canonical, case-folded). Falls back to the sole panel
-/// when exactly one is cached; otherwise `None`, so a multi-species cache without a
+/// The panel matching species (canonical, case-folded). Falls back to the sole panel
+/// when exactly one is cached; otherwise None, so a multi-species cache without a
 /// matching hint abstains rather than score reads against another organism's k-mers.
 fn pick_panel(species: Option<&str>) -> Option<&'static KmerPanel<End>> {
     let panels = species_panels();
@@ -93,8 +93,8 @@ fn pick_panel(species: Option<&str>) -> Option<&'static KmerPanel<End>> {
     None
 }
 
-/// Classify transcript-end bias from sampled cDNA (R2) `reads`, scoring against the panel
-/// for `species`. Pure: no I/O.
+/// Classify transcript-end bias from sampled cDNA (R2) reads, scoring against the panel
+/// for species. Pure: no I/O.
 pub fn classify(reads: &[Vec<u8>], species: Option<&str>) -> EndReport {
     match pick_panel(species) {
         Some(p) => classify_with(reads, &p.map, p.k),
@@ -164,7 +164,7 @@ fn classify_with(reads: &[Vec<u8>], panel: &FxHashMap<u128, End>, k: usize) -> E
     }
 }
 
-/// The r = n3/(n3+n5) decision rule; gray zones return `ambiguous`, too-few-hits `unknown`.
+/// The r = n3/(n3+n5) decision rule; gray zones return ambiguous, too-few-hits unknown.
 fn decide(n5: usize, n3: usize, no_panel: bool) -> (String, &'static str) {
     if no_panel {
         return ("unknown".into(), "low");

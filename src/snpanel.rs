@@ -1,8 +1,8 @@
-//! Single-nucleus species-ID intron panel: the complement to the exon `.spanel` catalogue.
+//! Single-nucleus species-ID intron panel: the complement to the exon .spanel catalogue.
 //!
 //! snRNA reads are intron-dominated (unspliced pre-mRNA) and miss the exon-biased species
-//! panels. Each `.snpanel` holds species-unique intronic k-mers. Loaded from `.snpanel` files
-//! in the panel cache dir (fetched by `fetch-panels`) and scored by [`crate::species`] as a
+//! panels. Each .snpanel holds species-unique intronic k-mers. Loaded from .snpanel files
+//! in the panel cache dir (fetched by fetch-panels) and scored by [crate::species] as a
 //! second channel when the exon call is weak.
 
 use rustc_hash::FxHashMap;
@@ -39,7 +39,7 @@ impl IntronCatalogue {
         ))
     }
 
-    /// [`load`], or an empty catalogue when no `.snpanel` is cached / on error.
+    /// [load], or an empty catalogue when no .snpanel is cached / on error.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn load_or_empty() -> IntronCatalogue {
         Self::load().unwrap_or_else(|_| Self::from_texts(&[]))
@@ -97,7 +97,7 @@ impl IntronCatalogue {
     }
 }
 
-/// Value of a `#key\t<value>` header line.
+/// Value of a #key\t<value> header line.
 fn header(text: &str, key: &str) -> Option<String> {
     let pfx = format!("#{key}\t");
     text.lines()

@@ -15,7 +15,7 @@ fn http_client() -> &'static reqwest::blocking::Client {
     HTTP_CLIENT.get_or_init(reqwest::blocking::Client::new)
 }
 
-/// Logs per-pull setup vs throughput when `PREFLIGHTX_FETCH_TIMING` is set.
+/// Logs per-pull setup vs throughput when PREFLIGHTX_FETCH_TIMING is set.
 #[cfg(not(target_arch = "wasm32"))]
 struct TimedReader<R> {
     inner: R,
@@ -50,10 +50,10 @@ impl<R> Drop for TimedReader<R> {
     }
 }
 
-/// In-browser virtual file system. The wasm-bindgen entry point ([`crate::wasm`])
-/// loads the uploaded FASTQ bytes here keyed by a synthetic name (e.g. `"r1"`),
-/// then calls the unchanged `&Path`-based analysis functions with that name as
-/// the path. `open()` resolves such a path to an in-memory reader, so the entire
+/// In-browser virtual file system. The wasm-bindgen entry point ([crate::wasm])
+/// loads the uploaded FASTQ bytes here keyed by a synthetic name (e.g. "r1"),
+/// then calls the unchanged &Path-based analysis functions with that name as
+/// the path. open() resolves such a path to an in-memory reader, so the entire
 /// analysis layer is shared with the native build with no signature changes.
 #[cfg(target_arch = "wasm32")]
 pub mod vfs {
@@ -65,7 +65,7 @@ pub mod vfs {
         static FILES: RefCell<HashMap<String, Arc<[u8]>>> = RefCell::new(HashMap::new());
     }
 
-    /// Store `bytes` (raw file contents, possibly gzipped) under `name`.
+    /// Store bytes (raw file contents, possibly gzipped) under name.
     pub fn put(name: &str, bytes: Vec<u8>) {
         FILES.with(|f| f.borrow_mut().insert(name.to_string(), Arc::from(bytes)));
     }
@@ -80,7 +80,7 @@ pub mod vfs {
         FILES.with(|f| f.borrow_mut().remove(name));
     }
 
-    /// True if any stored key starts with `prefix` (used to detect cached onlists).
+    /// True if any stored key starts with prefix (used to detect cached onlists).
     pub fn has_prefix(prefix: &str) -> bool {
         FILES.with(|f| f.borrow().keys().any(|k| k.starts_with(prefix)))
     }
@@ -91,13 +91,13 @@ pub mod vfs {
     }
 }
 
-/// True if `path` is an http(s)/ftp URL rather than a local filesystem path.
+/// True if path is an http(s)/ftp URL rather than a local filesystem path.
 pub fn is_remote(path: &Path) -> bool {
     let s = path.to_string_lossy();
     s.starts_with("http://") || s.starts_with("https://") || s.starts_with("ftp://")
 }
 
-/// Hosts to reach over FTP instead of HTTP (see `prefer_ftp`).
+/// Hosts to reach over FTP instead of HTTP (see prefer_ftp).
 #[cfg(not(target_arch = "wasm32"))]
 const FTP_PREFERRED_HOSTS: &[&str] = &["ftp.sra.ebi.ac.uk"];
 
@@ -111,7 +111,7 @@ fn ftp_dead_hosts() -> &'static std::sync::Mutex<std::collections::HashSet<Strin
     FTP_DEAD_HOSTS.get_or_init(Default::default)
 }
 
-/// Rewrite http(s) to `ftp://` for FTP-preferred hosts. `PREFLIGHTX_NO_FTP` disables it.
+/// Rewrite http(s) to ftp:// for FTP-preferred hosts. PREFLIGHTX_NO_FTP disables it.
 #[cfg(not(target_arch = "wasm32"))]
 fn prefer_ftp(url: &str) -> String {
     if std::env::var_os("PREFLIGHTX_NO_FTP").is_some() {
@@ -133,7 +133,7 @@ fn is_ftp(url: &str) -> bool {
     url.starts_with("ftp://")
 }
 
-/// Split `ftp://host/dir/file` into `("host", "/dir/file")`.
+/// Split ftp://host/dir/file into ("host", "/dir/file").
 #[cfg(not(target_arch = "wasm32"))]
 fn split_ftp(url: &str) -> Result<(String, String)> {
     let rest = url.strip_prefix("ftp://").context("not an ftp url")?;
@@ -141,12 +141,12 @@ fn split_ftp(url: &str) -> Result<(String, String)> {
     Ok((rest[..slash].to_string(), rest[slash..].to_string()))
 }
 
-/// True if `bytes` begin with the gzip magic number.
+/// True if bytes begin with the gzip magic number.
 pub fn is_gzip(bytes: &[u8]) -> bool {
     bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b
 }
 
-/// GET `url` with linear-backoff retries on transient failures. 4xx fails fast.
+/// GET url with linear-backoff retries on transient failures. 4xx fails fast.
 #[cfg(not(target_arch = "wasm32"))]
 fn fetch_with_retry(url: &str) -> Result<reqwest::blocking::Response> {
     const ATTEMPTS: u32 = 4;
@@ -289,7 +289,7 @@ mod bodycache {
         }
     }
 
-    /// `fetch` runs only on first open of `url`, with the map lock released so
+    /// fetch runs only on first open of url, with the map lock released so
     /// concurrent opens of other URLs don't serialize.
     pub fn reader(
         url: &str,
@@ -309,7 +309,7 @@ mod bodycache {
 }
 
 /// Open a fastx reader for a local file or http(s)/ftp URL. Remote inputs stream,
-/// cached per-URL via [`bodycache`].
+/// cached per-URL via [bodycache].
 #[cfg(not(target_arch = "wasm32"))]
 fn open(path: &Path) -> Result<Box<dyn FastxReader>> {
     if !is_remote(path) {
@@ -337,11 +337,11 @@ fn open(path: &Path) -> Result<Box<dyn FastxReader>> {
 }
 
 /// Wasm build: there is no filesystem and no blocking network. Input must have
-/// been registered in [`vfs`] by the bindgen entry point.
+/// been registered in [vfs] by the bindgen entry point.
 ///
-/// needletail's built-in compression sniffing is gated behind its `compression`
+/// needletail's built-in compression sniffing is gated behind its compression
 /// feature, which also pulls in the C-backed bz2/xz decoders that don't build
-/// for wasm. We therefore link only `flate2` and detect+decompress gzip here by
+/// for wasm. We therefore link only flate2 and detect+decompress gzip here by
 /// hand (the common case for FASTQ); the decoder is streaming, so sampling the
 /// first N reads never inflates the whole buffer. Plain (uncompressed) FASTQ is
 /// passed straight through; bz2/xz inputs are unsupported in the browser.
@@ -361,7 +361,7 @@ fn open(path: &Path) -> Result<Box<dyn FastxReader>> {
     }
 }
 
-/// Next record, or `None` at end of stream. A truncated final record reads as clean EOF
+/// Next record, or None at end of stream. A truncated final record reads as clean EOF
 /// (inputs are sliced/streamed, so a cut-off tail is expected); real malformation errors.
 fn next_record<'a>(
     reader: &'a mut dyn FastxReader,
@@ -377,8 +377,8 @@ fn next_record<'a>(
     }
 }
 
-/// Truncation: a truncated FASTQ record (`UnexpectedEnd`) or gzip EOF (`Io`, which
-/// needletail 0.5.1 only exposes via the message). `truncated_gzip_error_shape_is_pinned`
+/// Truncation: a truncated FASTQ record (UnexpectedEnd) or gzip EOF (Io, which
+/// needletail 0.5.1 only exposes via the message). truncated_gzip_error_shape_is_pinned
 /// guards the message match against a version bump.
 fn is_truncation(e: &needletail::errors::ParseError) -> bool {
     use needletail::errors::ParseErrorKind::{Io, UnexpectedEnd};
@@ -386,8 +386,8 @@ fn is_truncation(e: &needletail::errors::ParseError) -> bool {
         || (matches!(e.kind, Io) && e.msg.contains("unexpected end of file"))
 }
 
-/// Iterate up to `n` records from a fastq(.gz) file or URL, calling `cb` with (seq, qual).
-/// `qual` is the raw PHRED+33 byte slice; subtract 33 for the score.
+/// Iterate up to n records from a fastq(.gz) file or URL, calling cb with (seq, qual).
+/// qual is the raw PHRED+33 byte slice; subtract 33 for the score.
 pub fn for_each_record<F>(path: &Path, n: usize, mut cb: F) -> Result<usize>
 where
     F: FnMut(&[u8], Option<&[u8]>),
@@ -433,10 +433,10 @@ where
     Ok((fa()?, fb()?))
 }
 
-/// Owned sampled reads: `(sequences, qualities)`.
+/// Owned sampled reads: (sequences, qualities).
 pub type SampledReads = (Vec<Vec<u8>>, Vec<Vec<u8>>);
 
-/// Collect first `n` sequences and (optionally) their qualities as owned Vecs.
+/// Collect first n sequences and (optionally) their qualities as owned Vecs.
 pub fn sample(path: &Path, n: usize) -> Result<SampledReads> {
     let mut seqs = Vec::with_capacity(n);
     let mut quals = Vec::with_capacity(n);
@@ -449,16 +449,16 @@ pub fn sample(path: &Path, n: usize) -> Result<SampledReads> {
     Ok((seqs, quals))
 }
 
-/// First `n` sequences only (no quality copy). The common detector input.
+/// First n sequences only (no quality copy). The common detector input.
 pub fn sample_seqs(path: &Path, n: usize) -> Result<Vec<Vec<u8>>> {
     let mut seqs = Vec::with_capacity(n);
     for_each_record(path, n, |seq, _| seqs.push(seq.to_vec()))?;
     Ok(seqs)
 }
 
-/// Of two read files, the one whose first `probe` reads are longer on average: the
+/// Of two read files, the one whose first probe reads are longer on average: the
 /// cDNA insert rather than the short barcode/UMI read. Assay-agnostic (works for 10x,
-/// Parse, Drop-seq); ties (e.g. paired full-length reads) return `a`.
+/// Parse, Drop-seq); ties (e.g. paired full-length reads) return a.
 pub fn longer_read<'a>(a: &'a Path, b: &'a Path, probe: usize) -> Result<&'a Path> {
     fn mean_len(p: &Path, probe: usize) -> Result<f64> {
         let mut total = 0u64;
@@ -473,10 +473,10 @@ pub fn longer_read<'a>(a: &'a Path, b: &'a Path, probe: usize) -> Result<&'a Pat
     Ok(if la >= lb { a } else { b })
 }
 
-/// Stream paired reads from two FASTQ files in batches of `batch_size`.
-/// Calls `batch_fn(new_r1_seqs, new_r2_seqs)` after each batch, handing ownership of
-/// the batch so callers can move reads out (e.g. `Vec::append`) without cloning.
-/// Return `false` from the callback to stop early; returns total pairs read.
+/// Stream paired reads from two FASTQ files in batches of batch_size.
+/// Calls batch_fn(new_r1_seqs, new_r2_seqs) after each batch, handing ownership of
+/// the batch so callers can move reads out (e.g. Vec::append) without cloning.
+/// Return false from the callback to stop early; returns total pairs read.
 pub fn stream_paired_batched<F>(
     r1: &Path,
     r2: &Path,
@@ -575,7 +575,7 @@ mod tests {
         );
     }
 
-    /// Pins the error shape `is_truncation` matches on, so a needletail bump fails here.
+    /// Pins the error shape is_truncation matches on, so a needletail bump fails here.
     #[test]
     fn truncated_gzip_error_shape_is_pinned() {
         use needletail::errors::ParseErrorKind;

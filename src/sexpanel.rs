@@ -88,7 +88,7 @@ fn base_bits(b: u8) -> Option<u8> {
     }
 }
 
-/// 2-bit encode one A/C/G/T k-mer. Ambiguous bases and k > 64 return `None`.
+/// 2-bit encode one A/C/G/T k-mer. Ambiguous bases and k > 64 return None.
 pub(crate) fn encode_kmer(seq: &[u8]) -> Option<u128> {
     if seq.len() > 64 {
         return None;
@@ -207,15 +207,15 @@ fn parse_panel(text: &str) -> Option<SexPanel> {
     })
 }
 
-/// Parse the 3-pool `.spanel` format (k=50, canonical) into the female/male
-/// [`SexPanel`] plus the list of canonical autosomal (species-ID) k-mers.
+/// Parse the 3-pool .spanel format (k=50, canonical) into the female/male
+/// [SexPanel] plus the list of canonical autosomal (species-ID) k-mers.
 ///
 /// Row layout is robust to the column quirk in the catalogue: autosomal rows are
-/// `kmer\tautosomal` (2 cols) while female/male rows are `count\tkmer\tcategory`
+/// kmer\tautosomal (2 cols) while female/male rows are count\tkmer\tcategory
 /// (3 cols). The **category is always the last field** and the **k-mer is the
-/// longest field**, so we pick those two regardless of column count. `.spanel`
-/// rows carry no gene name, so female k-mers are tagged `XIST` and male `Y`
-/// (one synthetic gene each — the panels guarantee a single Y/XIST locus).
+/// longest field**, so we pick those two regardless of column count. .spanel
+/// rows carry no gene name, so female k-mers are tagged XIST and male Y
+/// (one synthetic gene each; the panels guarantee a single Y/XIST locus).
 pub(crate) fn parse_spanel(text: &str) -> Option<(SexPanel, Vec<Vec<u8>>)> {
     let mut meta: HashMap<&str, &str> = HashMap::new();
     let mut genes: Vec<String> = Vec::new();
@@ -296,14 +296,14 @@ fn registry() -> &'static Vec<SexPanel> {
     })
 }
 
-/// The panel for `species` (case-insensitive), if one is embedded.
+/// The panel for species (case-insensitive), if one is embedded.
 pub fn for_species(species: &str) -> Option<&'static SexPanel> {
     registry()
         .iter()
         .find(|p| p.species.eq_ignore_ascii_case(species))
 }
 
-/// Names of the species with an embedded panel (for error messages / `--help`).
+/// Names of the species with an embedded panel (for error messages / --help).
 pub fn species_list() -> Vec<&'static str> {
     registry().iter().map(|p| p.species.as_str()).collect()
 }

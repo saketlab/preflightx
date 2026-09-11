@@ -1,8 +1,8 @@
-//! preflightx — pre-flight sanity checks for single-cell RNA-seq FASTQ pairs.
+//! preflightx; pre-flight sanity checks for single-cell RNA-seq FASTQ pairs.
 //!
-//! Consumed two ways: the native `preflightx` binary (`main.rs` → [`cli::run`])
-//! and a WebAssembly library ([`wasm`]). Analysis modules are platform-agnostic
-//! and funnel I/O through [`fastq`], which on wasm reads from an in-memory file
+//! Consumed two ways: the native preflightx binary (main.rs → [cli::run])
+//! and a WebAssembly library ([wasm]). Analysis modules are platform-agnostic
+//! and funnel I/O through [fastq], which on wasm reads from an in-memory file
 //! map instead of the filesystem, so analysis code is shared across both targets.
 
 pub mod assay;
@@ -24,7 +24,7 @@ pub mod snpanel;
 pub mod species;
 pub mod stats;
 
-// Native-only: the cached `.spanel` catalogue (filesystem cache + ~130 MB bundle).
+// Native-only: the cached .spanel catalogue (filesystem cache + ~130 MB bundle).
 #[cfg(not(target_arch = "wasm32"))]
 pub mod speciespanel;
 

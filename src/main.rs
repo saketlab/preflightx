@@ -1,5 +1,5 @@
 //! Native binary entry point. All logic lives in the library crate
-//! (`preflightx::cli`); the wasm build produces a cdylib instead and never
+//! (preflightx::cli); the wasm build produces a cdylib instead and never
 //! compiles this binary's real body.
 
 #[cfg(not(target_arch = "wasm32"))]

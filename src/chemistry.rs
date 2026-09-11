@@ -27,6 +27,10 @@ const SPRT_THRESHOLD: f64 = 200.0; // nats
 const SPRT_MIN_READS: usize = 5_000;
 const SPRT_BATCH: usize = 2_000;
 
+/// Above this never-repeated-barcode fraction, a length-only match (see the
+/// is_single_cell gate in analyze) reads as noise, not real cell multiplexing.
+const MAX_NOVEL_BARCODE_RATIO: f64 = 0.5;
+
 #[derive(Serialize, Debug)]
 pub struct WhitelistScore {
     pub filename: String,
@@ -231,7 +235,7 @@ fn load_candidate_whitelists(
 // pure scoring core (the testable seam)
 
 /// The ranked outcome of scoring sampled reads against the assay registry. Holds
-/// everything `build_report` needs; produced by `analyze` with no I/O.
+/// everything build_report needs; produced by analyze with no I/O.
 pub(crate) struct Analysis {
     dominant: usize,
     len_dist: Vec<(usize, usize)>,
@@ -274,9 +278,9 @@ fn len_profile(seqs: &[Vec<u8>]) -> (usize, Vec<(usize, usize)>) {
     (dominant, dist)
 }
 
-/// Pick the confidence bucket from the per-read evidence: `high` needs strong total
-/// evidence, a clear lead over the runner-up, and a whitelist; `medium` needs any
-/// positive discrimination (or a single unambiguous candidate); else `low`.
+/// Pick the confidence bucket from the per-read evidence: high needs strong total
+/// evidence, a clear lead over the runner-up, and a whitelist; medium needs any
+/// positive discrimination (or a single unambiguous candidate); else low.
 fn classify_confidence(
     scored: &[(&'static AssaySpec, f64)],
     candidates: &[&'static AssaySpec],
@@ -300,7 +304,7 @@ fn classify_confidence(
 }
 
 /// Score the sampled reads against every candidate assay. Pure: no file or network
-/// access — whitelist barcode sets are passed in via `wl_sets`.
+/// access; whitelist barcode sets are passed in via wl_sets.
 fn analyze(
     r1_seqs: &[Vec<u8>],
     r2_seqs: &[Vec<u8>],
@@ -320,7 +324,7 @@ fn analyze(
             .or_insert_with(|| extract_cb_candidates(r1_seqs, spec.r1_cb_offset, spec.r1_cb_len));
     }
 
-    // Whitelist overlap, computed once per unique whitelist file present in `wl_sets`.
+    // Whitelist overlap, computed once per unique whitelist file present in wl_sets.
     let mut wl_scores: HashMap<&'static str, (usize, f64)> = HashMap::new();
     for spec in &candidates {
         if let Some(wl) = &spec.whitelist {
@@ -392,9 +396,23 @@ fn analyze(
     // Single-cell plausibility gate: real single-cell data has a barcode-length R1
     // (seqspec geometry), or a TSO, or whitelist overlap. Bulk/WGS has none, so this
     // stops a 100 bp genomic R1 from being force-fit to a 10x assay.
+    //
+    // Length alone is weak: a coincidental match (e.g. Smart-seq sharing a
+    // no-whitelist assay's R1 length) rarely reuses the same barcode value, while a
+    // real barcode pool does. A TSO or whitelist hit is direct evidence and skips
+    // this reuse check.
     let tso_pct = anchor_pcts.get(TSO_PRESENT.seq).copied().unwrap_or(0.0);
     let max_wl_pct = wl_scores.values().map(|(_, p)| *p).fold(0.0_f64, f64::max);
-    let is_single_cell = fits_barcode_len(dominant) || tso_pct >= 10.0 || max_wl_pct >= 50.0;
+    let denom = n_reads.max(1) as f64;
+    let barcode_reused = candidates
+        .iter()
+        .filter(|s| s.whitelist.is_none())
+        .map(|s| (s.r1_cb_offset, s.r1_cb_len))
+        .collect::<HashSet<_>>()
+        .iter()
+        .all(|key| *cb_sizes.get(key).unwrap_or(&0) as f64 / denom <= MAX_NOVEL_BARCODE_RATIO);
+    let is_single_cell =
+        (fits_barcode_len(dominant) && barcode_reused) || tso_pct >= 10.0 || max_wl_pct >= 50.0;
 
     Analysis {
         dominant,
@@ -424,10 +442,10 @@ fn log_likelihood_assay(
     tso_ll + wl_ll
 }
 
-/// Per-signal log-likelihood ratio for an assay, returned as `(tso_llr, whitelist_llr)`.
+/// Per-signal log-likelihood ratio for an assay, returned as (tso_llr, whitelist_llr).
 /// Summed for ranking; kept separate so the report can attribute the verdict per signal.
 ///
-/// TSO contribution is **one-sided** (`.max(0.0)`): a rate above background rewards the
+/// TSO contribution is **one-sided** (.max(0.0)): a rate above background rewards the
 /// assays that expect it, but a rate at/below background adds 0 rather than penalizing.
 /// Real 3' libraries often show ~background TSO-at-R2-start, so penalizing its absence
 /// wrongly defaulted ambiguous 26 bp libraries (3'v2 vs 5'v1, same onlist) to 5'.
@@ -467,9 +485,9 @@ fn same_geometry(a: &AssaySpec, b: &AssaySpec) -> bool {
         && a.whitelist.as_ref().map(|w| w.filename) == b.whitelist.as_ref().map(|w| w.filename)
 }
 
-/// True if `seq` carries `anchor`'s motif (its first `min_match_len` bases) within
-/// the `[scan_start, scan_end)` window. Single per-read predicate shared by the SPRT
-/// TSO counter and `scan_anchor`.
+/// True if seq carries anchor's motif (its first min_match_len bases) within
+/// the [scan_start, scan_end) window. Single per-read predicate shared by the SPRT
+/// TSO counter and scan_anchor.
 #[inline]
 fn anchor_hit(seq: &[u8], anchor: &AnchorMotif) -> bool {
     let end = seq.len().min(anchor.scan_end);
@@ -509,9 +527,9 @@ fn scan_anchor(reads: &[Vec<u8>], anchor: &AnchorMotif) -> f64 {
     100.0 * hits as f64 / reads.len() as f64
 }
 
-/// Load a whitelist if it is present in the cache, else `None`. On native this
+/// Load a whitelist if it is present in the cache, else None. On native this
 /// reads the file from disk; on wasm it reads the bytes the front-end stashed in
-/// [`fastq::vfs`] under the same `cache/filename` key.
+/// [fastq::vfs] under the same cache/filename key.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_whitelist_opt(path: &Path, cb_len: usize) -> Result<Option<HashSet<Vec<u8>>>> {
     if !path.exists() {
@@ -558,7 +576,7 @@ fn trim_ascii(mut line: &[u8]) -> &[u8] {
     line
 }
 
-/// Read one barcode per line, keying on the uppercased first `cb_len` bytes.
+/// Read one barcode per line, keying on the uppercased first cb_len bytes.
 fn parse_whitelist<R: BufRead>(mut reader: R, cb_len: usize) -> Result<HashSet<Vec<u8>>> {
     // 10x onlists run to several million barcodes; preallocate to avoid rehashing.
     let mut set = HashSet::with_capacity(4_000_000);
