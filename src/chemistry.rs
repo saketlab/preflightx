@@ -31,6 +31,16 @@ const SPRT_BATCH: usize = 2_000;
 /// is_single_cell gate in analyze) reads as noise, not real cell multiplexing.
 const MAX_NOVEL_BARCODE_RATIO: f64 = 0.5;
 
+/// After CB+UMI in R1, 10x 5' has the TSO and 10x 3' has oligo-dT.
+const R1_TSO_5P: &[u8] = b"TTTCTTATATGGG";
+const R1_TSO_WINDOW: (usize, usize) = (24, 45);
+const R1_POLYT: &[u8] = b"TTTTTTTTTTTT";
+const R1_POLYT_WINDOW: (usize, usize) = (24, 60);
+const R1_TSO_MIN_PCT: f64 = 30.0;
+const R1_POLYT_MIN_PCT: f64 = 50.0;
+const P_R1_MOTIF_SIGNAL: f64 = 0.50;
+const P_R1_MOTIF_BACKGROUND: f64 = 0.01;
+
 #[derive(Serialize, Debug)]
 pub struct WhitelistScore {
     pub filename: String,
@@ -94,6 +104,11 @@ pub struct ChemReport {
     pub n5: usize,
     pub n3: usize,
     pub end_ratio: f64,
+    /// geometry scored on the R1 prefix
+    pub long_r1: bool,
+    /// 0 unless long_r1
+    pub r1_tso_pct: f64,
+    pub r1_polyt_pct: f64,
     pub interpretation: Vec<Evidence>,
     pub notes: Vec<String>,
 }
@@ -105,21 +120,30 @@ pub fn detect(
     whitelist_cache: Option<&Path>,
     species: Option<&str>,
 ) -> Result<ChemReport> {
-    // orient + sample + load whitelists (I/O) -> analyze (pure) -> build_report (pure).
+    // orient + sample + match whitelists (I/O) -> analyze (pure) -> build_report (pure).
     let (eff_r1, eff_r2, swapped) = orient(r1, r2)?;
-    let wl_sets = match whitelist_cache {
+    let wl_candidates: Vec<&'static AssaySpec> = match whitelist_cache {
         Some(cache) => {
             let (preview, _) = fastq::sample(eff_r1, n.min(2_000))?;
-            let dominant = dominant_len(&preview);
-            let candidates = candidates_for(dominant);
-            load_candidate_whitelists(cache, &candidates)?
+            candidates_for(dominant_len(&preview))
+                .into_iter()
+                .filter(|s| {
+                    s.whitelist
+                        .is_some_and(|wl| whitelist_present(&cache.join(wl.filename)))
+                })
+                .collect()
         }
-        None => HashMap::new(),
+        None => Vec::new(),
     };
     // Whitelist overlap and the k-mer panels all need depth, so skip the SPRT early-stop.
-    let want_full =
-        !wl_sets.is_empty() || crate::endpanel::have_panels() || crate::atacpanel::have_panels();
+    let want_full = !wl_candidates.is_empty()
+        || crate::endpanel::have_panels()
+        || crate::atacpanel::have_panels();
     let s = sample_reads(eff_r1, eff_r2, n, want_full)?;
+    let wl_sets = whitelist_cache
+        .map(|c| load_candidate_whitelists(c, &wl_candidates, &s.r1))
+        .transpose()?
+        .unwrap_or_default();
 
     let analysis = analyze(&s.r1, &s.r2, &wl_sets, s.sprt_tso_hits);
     let end = crate::endpanel::classify(&s.r2, species);
@@ -211,22 +235,30 @@ fn sample_reads(eff_r1: &Path, eff_r2: &Path, n: usize, have_cache: bool) -> Res
     }
 }
 
-/// Barcode sets for the candidates' whitelists; files absent from the cache are
-/// skipped and score as no overlap.
+/// Sampled R1 barcodes found on each cached candidate whitelist.
 fn load_candidate_whitelists(
     cache: &Path,
     candidates: &[&'static AssaySpec],
+    r1_seqs: &[Vec<u8>],
 ) -> Result<HashMap<&'static str, HashSet<Vec<u8>>>> {
-    let mut sets: HashMap<&'static str, HashSet<Vec<u8>>> = HashMap::new();
+    let mut wanted: HashMap<&'static str, (usize, HashSet<Vec<u8>>)> = HashMap::new();
+    let mut done = HashSet::new();
     for spec in candidates {
         if let Some(wl) = &spec.whitelist {
-            if sets.contains_key(wl.filename) {
+            if !done.insert((wl.filename, spec.r1_cb_offset)) {
                 continue;
             }
-            let path = cache.join(wl.filename);
-            if let Some(set) = load_whitelist_opt(&path, wl.cb_len)? {
-                sets.insert(wl.filename, set);
-            }
+            wanted
+                .entry(wl.filename)
+                .or_insert_with(|| (wl.cb_len, HashSet::new()))
+                .1
+                .extend(extract_cb_candidates(r1_seqs, spec.r1_cb_offset, wl.cb_len));
+        }
+    }
+    let mut sets: HashMap<&'static str, HashSet<Vec<u8>>> = HashMap::new();
+    for (filename, (cb_len, keep)) in wanted {
+        if let Some(reader) = open_whitelist(&cache.join(filename))? {
+            sets.insert(filename, parse_whitelist(reader, cb_len, &keep)?);
         }
     }
     Ok(sets)
@@ -254,16 +286,62 @@ pub(crate) struct Analysis {
     /// a TSO, or whitelist overlap). False for bulk/genomic libraries, where the
     /// scored "winner" is a meaningless force-fit and must not be reported as a call.
     is_single_cell: bool,
+    long_r1: bool,
+    /// 0 unless long_r1
+    r1_tso_pct: f64,
+    r1_polyt_pct: f64,
 }
 
 /// Candidate assays for an observed R1 length: exact match, or +/-2 bp for
 /// non-standard cycle counts.
 ///
 fn candidates_for(dominant: usize) -> Vec<&'static AssaySpec> {
+    if is_long_r1(dominant) {
+        // inside a long read only an onlist can test the prefix
+        return ASSAYS
+            .iter()
+            .filter(|s| s.whitelist.is_some() && s.r1_expected_len() <= dominant)
+            .collect();
+    }
     ASSAYS
         .iter()
         .filter(|s| s.r1_expected_len().abs_diff(dominant) <= 2)
         .collect()
+}
+
+pub(crate) fn is_long_r1(dominant: usize) -> bool {
+    let longest = ASSAYS
+        .iter()
+        .map(|s| s.r1_expected_len())
+        .max()
+        .unwrap_or(0);
+    dominant > longest + 2 && !fits_barcode_len(dominant)
+}
+
+fn motif_pct(reads: &[Vec<u8>], needle: &[u8], window: (usize, usize)) -> f64 {
+    if reads.is_empty() {
+        return 0.0;
+    }
+    let hits = reads
+        .iter()
+        .filter(|s| {
+            let end = s.len().min(window.1);
+            end > window.0 && contains(&s[window.0..end], needle)
+        })
+        .count();
+    100.0 * hits as f64 / reads.len() as f64
+}
+
+fn r1_motif_llr(spec: &AssaySpec, r1_tso_pct: f64, r1_polyt_pct: f64, n_reads: usize) -> f64 {
+    let pct = if spec.id.contains("5prime") {
+        r1_tso_pct
+    } else if spec.id.contains("3prime") {
+        r1_polyt_pct
+    } else {
+        return 0.0;
+    };
+    let k = (pct / 100.0 * n_reads as f64).round() as usize;
+    bernoulli_llr(k, n_reads, P_R1_MOTIF_SIGNAL, P_R1_MOTIF_BACKGROUND).max(0.0)
 }
 
 /// R1 length histogram: the dominant length and the full distribution (descending by count).
@@ -368,15 +446,26 @@ fn analyze(
         }
     }
 
+    let long_r1 = is_long_r1(dominant);
+    let (r1_tso_pct, r1_polyt_pct) = if long_r1 {
+        (
+            motif_pct(r1_seqs, R1_TSO_5P, R1_TSO_WINDOW),
+            motif_pct(r1_seqs, R1_POLYT, R1_POLYT_WINDOW),
+        )
+    } else {
+        (0.0, 0.0)
+    };
+
     let cb_sizes: HashMap<(usize, usize), usize> =
         cb_sets.iter().map(|(k, v)| (*k, v.len())).collect();
     let mut scored: Vec<(&'static AssaySpec, f64)> = candidates
         .iter()
         .map(|spec| {
-            (
-                *spec,
-                log_likelihood_assay(spec, &anchor_pcts, n_reads, &wl_scores, &cb_sizes),
-            )
+            let mut ll = log_likelihood_assay(spec, &anchor_pcts, n_reads, &wl_scores, &cb_sizes);
+            if long_r1 {
+                ll += r1_motif_llr(spec, r1_tso_pct, r1_polyt_pct, n_reads);
+            }
+            (*spec, ll)
         })
         .collect();
     scored.sort_by(|a, b| {
@@ -404,15 +493,24 @@ fn analyze(
     let tso_pct = anchor_pcts.get(TSO_PRESENT.seq).copied().unwrap_or(0.0);
     let max_wl_pct = wl_scores.values().map(|(_, p)| *p).fold(0.0_f64, f64::max);
     let denom = n_reads.max(1) as f64;
+    let reused = |key: &(usize, usize)| {
+        *cb_sizes.get(key).unwrap_or(&0) as f64 / denom <= MAX_NOVEL_BARCODE_RATIO
+    };
     let barcode_reused = candidates
         .iter()
         .filter(|s| s.whitelist.is_none())
         .map(|s| (s.r1_cb_offset, s.r1_cb_len))
         .collect::<HashSet<_>>()
         .iter()
-        .all(|key| *cb_sizes.get(key).unwrap_or(&0) as f64 / denom <= MAX_NOVEL_BARCODE_RATIO);
-    let is_single_cell =
-        (fits_barcode_len(dominant) && barcode_reused) || tso_pct >= 10.0 || max_wl_pct >= 50.0;
+        .all(reused);
+    // oligo-dT also occurs in 3'-tag bulk, so require repeating barcodes
+    let prefix_reused = long_r1 && cb_sizes.contains_key(&(0, 16)) && reused(&(0, 16));
+    let long_r1_sc = long_r1
+        && (r1_tso_pct >= R1_TSO_MIN_PCT || (r1_polyt_pct >= R1_POLYT_MIN_PCT && prefix_reused));
+    let is_single_cell = (fits_barcode_len(dominant) && barcode_reused)
+        || tso_pct >= 10.0
+        || max_wl_pct >= 50.0
+        || long_r1_sc;
 
     Analysis {
         dominant,
@@ -427,6 +525,9 @@ fn analyze(
         tso_pct,
         max_wl_pct,
         is_single_cell,
+        long_r1,
+        r1_tso_pct,
+        r1_polyt_pct,
     }
 }
 
@@ -527,11 +628,18 @@ fn scan_anchor(reads: &[Vec<u8>], anchor: &AnchorMotif) -> f64 {
     100.0 * hits as f64 / reads.len() as f64
 }
 
-/// Load a whitelist if it is present in the cache, else None. On native this
-/// reads the file from disk; on wasm it reads the bytes the front-end stashed in
-/// [fastq::vfs] under the same cache/filename key.
 #[cfg(not(target_arch = "wasm32"))]
-fn load_whitelist_opt(path: &Path, cb_len: usize) -> Result<Option<HashSet<Vec<u8>>>> {
+fn whitelist_present(path: &Path) -> bool {
+    path.exists()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn whitelist_present(path: &Path) -> bool {
+    fastq::vfs::get(&path.to_string_lossy()).is_some()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn open_whitelist(path: &Path) -> Result<Option<Box<dyn BufRead>>> {
     if !path.exists() {
         return Ok(None);
     }
@@ -542,17 +650,16 @@ fn load_whitelist_opt(path: &Path, cb_len: usize) -> Result<Option<HashSet<Vec<u
     } else {
         Box::new(f)
     };
-    Ok(Some(parse_whitelist(
-        std::io::BufReader::new(reader),
-        cb_len,
-    )?))
+    Ok(Some(Box::new(std::io::BufReader::with_capacity(
+        1 << 20,
+        reader,
+    ))))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn load_whitelist_opt(path: &Path, cb_len: usize) -> Result<Option<HashSet<Vec<u8>>>> {
+fn open_whitelist(path: &Path) -> Result<Option<Box<dyn BufRead>>> {
     use std::io::Cursor;
-    let key = path.to_string_lossy();
-    let Some(bytes) = fastq::vfs::get(&key) else {
+    let Some(bytes) = fastq::vfs::get(&path.to_string_lossy()) else {
         return Ok(None);
     };
     let reader: Box<dyn std::io::Read> = if fastq::is_gzip(&bytes) {
@@ -560,10 +667,7 @@ fn load_whitelist_opt(path: &Path, cb_len: usize) -> Result<Option<HashSet<Vec<u
     } else {
         Box::new(Cursor::new(bytes))
     };
-    Ok(Some(parse_whitelist(
-        std::io::BufReader::new(reader),
-        cb_len,
-    )?))
+    Ok(Some(Box::new(std::io::BufReader::new(reader))))
 }
 
 fn trim_ascii(mut line: &[u8]) -> &[u8] {
@@ -576,10 +680,13 @@ fn trim_ascii(mut line: &[u8]) -> &[u8] {
     line
 }
 
-/// Read one barcode per line, keying on the uppercased first cb_len bytes.
-fn parse_whitelist<R: BufRead>(mut reader: R, cb_len: usize) -> Result<HashSet<Vec<u8>>> {
-    // 10x onlists run to several million barcodes; preallocate to avoid rehashing.
-    let mut set = HashSet::with_capacity(4_000_000);
+/// Whitelist barcodes that are also in keep.
+fn parse_whitelist<R: BufRead>(
+    mut reader: R,
+    cb_len: usize,
+    keep: &HashSet<Vec<u8>>,
+) -> Result<HashSet<Vec<u8>>> {
+    let mut set = HashSet::with_capacity(keep.len());
     let mut line = Vec::with_capacity(128);
     loop {
         line.clear();
@@ -587,8 +694,17 @@ fn parse_whitelist<R: BufRead>(mut reader: R, cb_len: usize) -> Result<HashSet<V
             break;
         }
         let line = trim_ascii(&line);
-        if line.len() >= cb_len {
-            set.insert(uppercase_key(&line[..cb_len]));
+        if line.len() < cb_len {
+            continue;
+        }
+        let bc = &line[..cb_len];
+        if keep.contains(bc) {
+            set.insert(bc.to_vec());
+        } else if bc.iter().any(u8::is_ascii_lowercase) {
+            let key = bc.to_ascii_uppercase();
+            if keep.contains(&key) {
+                set.insert(key);
+            }
         }
     }
     Ok(set)
@@ -603,6 +719,47 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 
 mod report;
 pub(crate) use report::build_report;
+
+#[cfg(test)]
+pub(crate) fn test_chem_report(is_single_cell: bool, confidence: &str) -> ChemReport {
+    ChemReport {
+        r1_length_dominant: 28,
+        r1_length_distribution: vec![],
+        reads_sampled: 0,
+        assay_id: "none".into(),
+        // matches what chemistry::report writes on a negative call
+        assay_display: if is_single_cell {
+            "10x 3' v3".into()
+        } else {
+            "Not single-cell".into()
+        },
+        cb_read: "R1".into(),
+        cb_offset: 0,
+        cb_len: 16,
+        umi_offset: 16,
+        umi_len: 12,
+        n_cb_candidates: 0,
+        is_single_cell,
+        early_stop: false,
+        whitelist: None,
+        whitelist_scores: vec![],
+        anchor_scores: vec![],
+        tool_hints: vec![],
+        confidence: confidence.into(),
+        modality: "rna".into(),
+        atac_promoter_frac: 0.0,
+        end: "unknown".into(),
+        end_confidence: "low".into(),
+        n5: 0,
+        n3: 0,
+        end_ratio: 0.0,
+        long_r1: false,
+        r1_tso_pct: 0.0,
+        r1_polyt_pct: 0.0,
+        interpretation: vec![],
+        notes: vec![],
+    }
+}
 
 #[cfg(test)]
 mod tests;

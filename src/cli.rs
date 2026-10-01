@@ -190,7 +190,8 @@ pub fn run() -> Result<()> {
             } else {
                 (None, None)
             };
-            let bulk = size::bulk_or_sc(&r1, cli.n_reads)?;
+            let bulk =
+                size::reconcile_with_chemistry(size::bulk_or_sc(&r1, cli.n_reads)?, chem.as_ref());
             let sz = size::size_sanity(&r1, r2.as_deref(), cli.n_reads)?;
             let cdna_read = match r2.as_deref() {
                 Some(r2p) => fastq::longer_read(&r1, r2p, 256)?,

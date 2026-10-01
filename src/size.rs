@@ -97,6 +97,28 @@ pub fn bulk_or_sc(r1: &Path, n: usize) -> Result<BulkReport> {
     })
 }
 
+/// A single-cell chemistry call overrules a length-only bulk verdict.
+pub fn reconcile_with_chemistry(
+    mut bulk: BulkReport,
+    chem: Option<&crate::chemistry::ChemReport>,
+) -> BulkReport {
+    let Some(c) = chem else { return bulk };
+    if !c.is_single_cell || !bulk.verdict.starts_with("bulk") {
+        return bulk;
+    }
+    bulk.notes.push(format!(
+        "Overruled by chemistry: R1 is {}bp but carries a single-cell barcode at its start ({}; onlist/TSO/oligo-dT evidence), so this is not bulk.",
+        bulk.r1_length_dominant, c.assay_display,
+    ));
+    bulk.verdict = "single_cell";
+    bulk.confidence = match c.confidence.as_str() {
+        "high" => "high",
+        "medium" => "medium",
+        _ => "low",
+    };
+    bulk
+}
+
 pub fn size_sanity(r1: &Path, r2: Option<&Path>, n: usize) -> Result<SizeReport> {
     let r1_summary = per_file(r1, n)?;
     let r2_summary = r2.map(|p| per_file(p, n)).transpose()?;
@@ -261,6 +283,31 @@ mod tests {
             report.notes.iter().any(|n| n.contains("R2 mean PHRED")),
             "notes={:?}",
             report.notes
+        );
+    }
+
+    #[test]
+    fn chemistry_single_cell_overrules_long_r1_bulk_verdict() {
+        let p = write_fastq("size_long_sc", &fixed_len_reads(150, 200));
+        let bulk = bulk_or_sc(&p, 1000).unwrap();
+        std::fs::remove_file(&p).ok();
+        assert_eq!(bulk.verdict, "bulk_or_5prime_broken");
+        let chem = crate::chemistry::test_chem_report(true, "medium");
+        let r = reconcile_with_chemistry(bulk, Some(&chem));
+        assert_eq!(r.verdict, "single_cell");
+        assert_eq!(r.confidence, "medium");
+        assert!(r.notes.iter().any(|n| n.contains("Overruled by chemistry")));
+    }
+
+    #[test]
+    fn chemistry_negative_keeps_bulk_verdict() {
+        let p = write_fastq("size_long_bulk", &fixed_len_reads(150, 200));
+        let bulk = bulk_or_sc(&p, 1000).unwrap();
+        std::fs::remove_file(&p).ok();
+        let chem = crate::chemistry::test_chem_report(false, "low");
+        assert_eq!(
+            reconcile_with_chemistry(bulk, Some(&chem)).verdict,
+            "bulk_or_5prime_broken"
         );
     }
 }

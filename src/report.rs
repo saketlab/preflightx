@@ -451,40 +451,9 @@ mod tests {
     }
 
     fn chem_rep(is_single_cell: bool, modality: &str, confidence: &str) -> ChemReport {
-        ChemReport {
-            r1_length_dominant: 28,
-            r1_length_distribution: vec![],
-            reads_sampled: 0,
-            assay_id: "none".into(),
-            // matches what chemistry::report writes on a negative call
-            assay_display: if is_single_cell {
-                "10x 3' v3".into()
-            } else {
-                "Not single-cell".into()
-            },
-            cb_read: "R1".into(),
-            cb_offset: 0,
-            cb_len: 16,
-            umi_offset: 16,
-            umi_len: 12,
-            n_cb_candidates: 0,
-            is_single_cell,
-            early_stop: false,
-            whitelist: None,
-            whitelist_scores: vec![],
-            anchor_scores: vec![],
-            tool_hints: vec![],
-            confidence: confidence.into(),
-            modality: modality.into(),
-            atac_promoter_frac: 0.0,
-            end: "unknown".into(),
-            end_confidence: "low".into(),
-            n5: 0,
-            n3: 0,
-            end_ratio: 0.0,
-            interpretation: vec![],
-            notes: vec![],
-        }
+        let mut c = crate::chemistry::test_chem_report(is_single_cell, confidence);
+        c.modality = modality.into();
+        c
     }
 
     #[test]

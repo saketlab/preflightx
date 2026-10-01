@@ -383,3 +383,157 @@ fn empty_whitelist_cache_keeps_sprt_fast_path() {
         report.reads_sampled
     );
 }
+
+/// deterministic motif-free bases
+fn pseudo_random(seed: usize, len: usize) -> Vec<u8> {
+    let mut x = (seed as u64)
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
+    (0..len)
+        .map(|_| {
+            x = x
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            b"ACGT"[(x >> 33) as usize % 4]
+        })
+        .collect()
+}
+
+/// 150 bp R1: CB16 + UMI + after + filler, over 40 cells
+fn long_r1_reads(n: usize, umi_len: usize, after: &[u8]) -> (Vec<Vec<u8>>, HashSet<Vec<u8>>) {
+    let mut cbs = HashSet::new();
+    let reads = (0..n)
+        .map(|i| {
+            let cb = distinct_cb(i % 40);
+            cbs.insert(cb.clone());
+            let mut r = cb;
+            r.extend_from_slice(&pseudo_random(i, umi_len));
+            r.extend_from_slice(after);
+            let rest = 150 - r.len();
+            r.extend_from_slice(&pseudo_random(i + 1_000_000, rest));
+            r
+        })
+        .collect();
+    (reads, cbs)
+}
+
+#[test]
+fn long_r1_is_long() {
+    assert!(is_long_r1(150));
+    assert!(is_long_r1(151));
+    assert!(is_long_r1(100));
+    // seqspec barcode read lengths
+    assert!(!is_long_r1(28));
+    assert!(!is_long_r1(33));
+    assert!(!is_long_r1(50));
+}
+
+#[test]
+fn long_r1_10x_5prime_tso_is_single_cell_without_cache() {
+    // TSO in R1 only
+    let (r1, _) = long_r1_reads(400, 10, R1_TSO_5P);
+    let r2: Vec<Vec<u8>> = (0..400).map(|i| pseudo_random(i + 7, 150)).collect();
+    let a = analyze(&r1, &r2, &HashMap::new(), Some(0));
+    assert!(a.long_r1);
+    assert!(a.r1_tso_pct > 90.0, "r1_tso_pct={}", a.r1_tso_pct);
+    assert!(a.is_single_cell, "long-R1 5' library must be single-cell");
+    assert!(
+        a.scored[0].0.id.starts_with("10x_5prime"),
+        "winner {}",
+        a.scored[0].0.id
+    );
+}
+
+#[test]
+fn long_r1_10x_3prime_polyt_with_whitelist_is_v3() {
+    let (r1, cbs) = long_r1_reads(400, 12, &[b'T'; 30]);
+    let r2: Vec<Vec<u8>> = (0..400).map(|i| pseudo_random(i + 9, 150)).collect();
+    let mut wl_sets: HashMap<&'static str, HashSet<Vec<u8>>> = HashMap::new();
+    wl_sets.insert("3M-february-2018.txt.gz", cbs);
+    let a = analyze(&r1, &r2, &wl_sets, Some(0));
+    assert!(a.is_single_cell);
+    assert!(a.max_wl_pct >= 99.0);
+    assert!(
+        a.scored[0].0.id.starts_with("10x_3prime"),
+        "winner {}",
+        a.scored[0].0.id
+    );
+    let report = build_report(
+        a,
+        false,
+        400,
+        false,
+        crate::endpanel::classify(&[], None),
+        crate::atacpanel::classify(&[], None),
+    );
+    assert!(report.is_single_cell && report.long_r1);
+    assert!(
+        report.notes.iter().any(|n| n.contains("cDNA run-on")),
+        "notes={:?}",
+        report.notes
+    );
+}
+
+#[test]
+fn long_r1_random_bulk_stays_bulk() {
+    let r1: Vec<Vec<u8>> = (0..400).map(|i| pseudo_random(i, 150)).collect();
+    let r2: Vec<Vec<u8>> = (0..400).map(|i| pseudo_random(i + 5_000, 150)).collect();
+    let a = analyze(&r1, &r2, &HashMap::new(), Some(0));
+    assert!(a.long_r1 && !a.is_single_cell);
+}
+
+#[test]
+fn long_r1_oligo_dt_without_barcode_reuse_is_not_single_cell() {
+    // 3'-tag bulk: fixed-offset oligo-dT, unique prefixes
+    let r1: Vec<Vec<u8>> = (0..400)
+        .map(|i| {
+            let mut r = pseudo_random(i, 28);
+            r.extend_from_slice(&[b'T'; 30]);
+            r.extend_from_slice(&pseudo_random(i + 9_999, 92));
+            r
+        })
+        .collect();
+    let r2: Vec<Vec<u8>> = (0..400).map(|i| pseudo_random(i + 3, 150)).collect();
+    let a = analyze(&r1, &r2, &HashMap::new(), Some(0));
+    assert!(a.r1_polyt_pct > 90.0);
+    assert!(!a.is_single_cell);
+}
+
+#[test]
+fn parse_whitelist_keeps_only_sampled_barcodes() {
+    let onlist = b"AAAACCCCGGGGTTTT\nacgtacgtacgtacgt-1\nTTTTGGGGCCCCAAAA\nshort\n";
+    let keep: HashSet<Vec<u8>> = [b"ACGTACGTACGTACGT".to_vec(), b"GGGGGGGGGGGGGGGG".to_vec()]
+        .into_iter()
+        .collect();
+    let got = parse_whitelist(&onlist[..], 16, &keep).unwrap();
+    let want: HashSet<Vec<u8>> = [b"ACGTACGTACGTACGT".to_vec()].into_iter().collect();
+    assert_eq!(
+        got, want,
+        "lowercase line uppercased; unsampled and short lines dropped"
+    );
+}
+
+#[test]
+fn filtered_whitelist_gives_same_overlap_as_full_onlist() {
+    // pre-filtering the onlist to the sample must not change the score
+    let (r1, r2, cbs) = tenx_v3_reads(200, true);
+    let mut full = cbs.clone();
+    for i in 1_000..5_000 {
+        full.insert(distinct_cb(i));
+    }
+    let keep: HashSet<Vec<u8>> = extract_cb_candidates(&r1, 0, 16);
+    let text: Vec<u8> = full
+        .iter()
+        .flat_map(|b| [b.as_slice(), b"\n"].concat())
+        .collect();
+    let filtered = parse_whitelist(&text[..], 16, &keep).unwrap();
+    let mut a_sets: HashMap<&'static str, HashSet<Vec<u8>>> = HashMap::new();
+    a_sets.insert("3M-february-2018.txt.gz", full);
+    let mut b_sets: HashMap<&'static str, HashSet<Vec<u8>>> = HashMap::new();
+    b_sets.insert("3M-february-2018.txt.gz", filtered);
+    let a = analyze(&r1, &r2, &a_sets, None);
+    let b = analyze(&r1, &r2, &b_sets, None);
+    assert_eq!(a.wl_scores, b.wl_scores);
+    assert_eq!(a.scored[0].0.id, b.scored[0].0.id);
+    assert_eq!(a.confidence, b.confidence);
+}

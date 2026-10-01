@@ -29,6 +29,9 @@ pub(crate) fn build_report(
         tso_pct,
         max_wl_pct,
         is_single_cell,
+        long_r1,
+        r1_tso_pct,
+        r1_polyt_pct,
     } = a;
 
     // A non-single-cell winner is a force-fit; never present it as confident.
@@ -113,6 +116,12 @@ pub(crate) fn build_report(
              This is not a 10x or Drop-seq library. It may be bulk/genomic, or another single-cell assay \
              (BD Rhapsody, Parse, SPLiT-seq, …) — run `preflightx detect-assay` to check those."
         ));
+        if long_r1 {
+            notes.push(format!(
+                "R1 is long, so its first 16-28bp were also tested as a barcode read: 5' TSO after CB+UMI in {r1_tso_pct:.0}% of R1, oligo-dT in {r1_polyt_pct:.0}%{}. Plate-based full-length protocols (Smart-seq2/3) carry no in-read barcode and stay indistinguishable from bulk.",
+                if has_wl { "" } else { " (no whitelist cache, so the onlist was not tested; run `preflightx fetch-whitelists`)" },
+            ));
+        }
         if let Some(w) = winner {
             notes.push(format!(
                 "If it were 10x/Drop-seq, the closest geometry would be {} ({}bp: CB{}+UMI{}) — but the evidence above does not support that call.",
@@ -179,7 +188,12 @@ pub(crate) fn build_report(
         }
         if let Some(w) = winner {
             let expected = w.r1_expected_len();
-            if expected != dominant && dominant > 0 {
+            if long_r1 {
+                notes.push(format!(
+                    "R1 is {dominant}bp: a barcode read with cDNA run-on (e.g. a 150+150 upload). {} geometry was scored on R1[0..{expected}]; 5' TSO after CB+UMI in {r1_tso_pct:.0}% of R1, oligo-dT in {r1_polyt_pct:.0}%. Trim R1 to {expected}bp before alignment.",
+                    w.display_name,
+                ));
+            } else if expected != dominant && dominant > 0 {
                 notes.push(format!(
                     "R1 reads are {}bp but {} expects {}bp; library may have been sequenced at non-standard cycles.",
                     dominant, w.id, expected,
@@ -291,6 +305,21 @@ pub(crate) fn build_report(
     } else {
         build_not_single_cell_interpretation(dominant, tso_pct, max_wl_pct, n_reads, winner)
     };
+    if long_r1 && !is_atac {
+        // keep the Verdict last
+        interpretation.insert(interpretation.len().saturating_sub(1), Evidence {
+            signal: "Long R1 prefix".into(),
+            observation: format!(
+                "R1 is {dominant}bp; 5' TSO after CB+UMI in {r1_tso_pct:.1}% of R1, oligo-dT in {r1_polyt_pct:.1}%, best onlist overlap of R1[0..16] {max_wl_pct:.1}%"
+            ),
+            llr_contribution: None,
+            conclusion: if is_single_cell {
+                "A long R1 can still be the barcode read (150+150 uploads): the barcode sits at its start and the TSO or oligo-dT follows CB+UMI, so this is single-cell.".into()
+            } else {
+                "The start of R1 carries no barcode, TSO or oligo-dT signal, so the long R1 is cDNA/genomic, not a barcode read.".into()
+            },
+        });
+    }
     if polarity_unresolved && !is_atac {
         if let (Some(w), Some(r)) = (winner, runner) {
             interpretation.push(Evidence {
@@ -329,6 +358,9 @@ pub(crate) fn build_report(
     }
 
     ChemReport {
+        long_r1,
+        r1_tso_pct: fastq::round2(r1_tso_pct),
+        r1_polyt_pct: fastq::round2(r1_polyt_pct),
         r1_length_dominant: dominant,
         r1_length_distribution: len_dist.into_iter().take(5).collect(),
         reads_sampled: n_reads,
