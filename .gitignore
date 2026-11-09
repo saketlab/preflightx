@@ -8,3 +8,8 @@ web/pkg/
 web/whitelists/
 deploy/
 web/data/panels/
+experiments/references/
+experiments/**/work/
+experiments/**/work_mouse/
+experiments/ubiquity_ranking/data/
+experiments/ubiquity_ranking/results/

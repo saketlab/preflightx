@@ -416,7 +416,35 @@ const ONLIST_SOURCES: &[(&str, &str, OnlistSource)] = &[
             url: "https://teichlab.github.io/scg_lib_structs/data/Quartz-seq2_cell_barcodes.txt",
         },
     ),
+    // one 96-barcode set serves all three SPLiT-seq rounds
+    (
+        "split_seq.spec.yaml",
+        "barcode-1_onlist.txt",
+        SPLITSEQ_ONLIST,
+    ),
+    (
+        "split_seq.spec.yaml",
+        "barcode-2_onlist.txt",
+        SPLITSEQ_ONLIST,
+    ),
+    (
+        "split_seq.spec.yaml",
+        "barcode-3_onlist.txt",
+        SPLITSEQ_ONLIST,
+    ),
 ];
+
+/// Bundled because the barcodes are published only inside an xlsx; an empty url marks a bundled source.
+const SPLITSEQ_ONLIST: OnlistSource = OnlistSource {
+    cache_name: "splitseq_barcodes.txt",
+    url: "",
+};
+
+/// Onlists compiled into the binary, keyed by cache name.
+const BUNDLED_ONLISTS: &[(&str, &str)] = &[(
+    "splitseq_barcodes.txt",
+    include_str!("../data/onlists/splitseq_barcodes.txt"),
+)];
 
 /// Resolve a spec-local onlist filename to a fetchable source; None leaves the assay geometry-only.
 fn onlist_source(spec_file: &str, onlist_filename: &str) -> Option<OnlistSource> {
@@ -426,20 +454,27 @@ fn onlist_source(spec_file: &str, onlist_filename: &str) -> Option<OnlistSource>
         .map(|(_, _, src)| *src)
 }
 
-/// Every distinct onlist source preflightx can fetch (for fetch-whitelists).
+/// Every distinct onlist source preflightx can fetch (for fetch-whitelists); bundled ones excluded.
 pub fn onlist_fetch_list() -> Vec<OnlistSource> {
     let mut seen = std::collections::HashSet::new();
     ONLIST_SOURCES
         .iter()
-        .filter(|(_, _, s)| seen.insert(s.cache_name))
+        .filter(|(_, _, s)| !s.url.is_empty() && seen.insert(s.cache_name))
         .map(|(_, _, s)| *s)
+        .collect()
+}
+
+fn bundled_onlists() -> std::collections::HashMap<String, std::collections::HashSet<Vec<u8>>> {
+    BUNDLED_ONLISTS
+        .iter()
+        .map(|(name, text)| (name.to_string(), parse_onlist(text)))
         .collect()
 }
 
 /// Load every cached onlist, keyed by cache name; uncached files leave their assay geometry-only.
 #[cfg(not(target_arch = "wasm32"))]
 fn load_cached_onlists() -> std::collections::HashMap<String, std::collections::HashSet<Vec<u8>>> {
-    let mut sets = std::collections::HashMap::new();
+    let mut sets = bundled_onlists();
     let Ok(dir) = crate::whitelists::cache_dir() else {
         return sets;
     };
@@ -454,7 +489,7 @@ fn load_cached_onlists() -> std::collections::HashMap<String, std::collections::
 
 #[cfg(target_arch = "wasm32")]
 fn load_cached_onlists() -> std::collections::HashMap<String, std::collections::HashSet<Vec<u8>>> {
-    let mut sets = std::collections::HashMap::new();
+    let mut sets = bundled_onlists();
     for src in onlist_fetch_list() {
         // key must match where wasm::load_whitelist stashes onlists
         let key = format!("{}/{}", crate::wasm::WL_DIR, src.cache_name);
@@ -1132,14 +1167,26 @@ mod tests {
         // so resolution must be keyed per assay, not by filename alone.
         assert!(onlist_source("drop_seq.spec.yaml", "cell_bc_onlist.txt").is_none());
 
+        // SPLiT-seq resolves to one bundled list shared by all three rounds.
+        for local in [
+            "barcode-1_onlist.txt",
+            "barcode-2_onlist.txt",
+            "barcode-3_onlist.txt",
+        ] {
+            let src = onlist_source("split_seq.spec.yaml", local).unwrap();
+            assert_eq!(src.cache_name, "splitseq_barcodes.txt");
+            assert!(src.url.is_empty());
+        }
+        assert!(!onlist_fetch_list().iter().any(|s| s.url.is_empty()));
+        assert_eq!(bundled_onlists()["splitseq_barcodes.txt"].len(), 96);
+
         // Unframeable / non-barcode-list assays stay geometry-only.
-        assert!(onlist_source("split_seq.spec.yaml", "barcode-1_onlist.txt").is_none());
         assert!(onlist_source("bd_rhapsody_eb.spec.yaml", "cls1_onlist.txt").is_none());
         assert!(onlist_source("indropv2.spec.yaml", "nope.txt").is_none());
 
         // Cache names are globally unique, so the loaded-set map never collides.
         let mut seen = std::collections::HashSet::new();
-        for (_, _, src) in ONLIST_SOURCES {
+        for (_, _, src) in ONLIST_SOURCES.iter().filter(|(_, _, s)| !s.url.is_empty()) {
             assert!(
                 seen.insert(src.cache_name),
                 "dup cache_name {}",

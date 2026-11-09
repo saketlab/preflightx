@@ -134,9 +134,12 @@ pub static ASSAYS: &[AssaySpec] = &[
             ("cellranger", "--chemistry SC3Pv2"),
         ],
     },
+    // 5' v1 and v2 share CB 16 + UMI 10 and the 737K-august-2016 onlist (Cell Ranger
+    // SC5P-PE/SC5P-R2), so reads cannot separate them. The id stays 10x_5prime_v1 so
+    // stored calls keep their key; 3M-5pgex-jan-2023 is 5' v3 only.
     AssaySpec {
         id: "10x_5prime_v1",
-        display_name: "10x Chromium 5' v1",
+        display_name: "10x Chromium 5' v1 or v2",
         r1_cb_offset: 0,
         r1_cb_len: 16,
         r1_umi_offset: 16,
@@ -144,17 +147,6 @@ pub static ASSAYS: &[AssaySpec] = &[
         whitelist: Some(WL_737K_2016),
         r2_anchors: &A_TSO_ABSENT,
         tool_hints: &[("cellranger", "--chemistry SC5P-PE")],
-    },
-    AssaySpec {
-        id: "10x_5prime_v2",
-        display_name: "10x Chromium 5' v2",
-        r1_cb_offset: 0,
-        r1_cb_len: 16,
-        r1_umi_offset: 16,
-        r1_umi_len: 10,
-        whitelist: Some(WL_3M_5PGEX2023),
-        r2_anchors: &A_TSO_ABSENT,
-        tool_hints: &[("cellranger", "--chemistry SC5P-PE-v2")],
     },
     AssaySpec {
         id: "10x_3prime_v3",
@@ -234,6 +226,27 @@ mod tests {
         assert_eq!(celseq2.r1_expected_len(), 12);
         assert!(celseq2.starsolo_hint().contains("--soloUMIstart 1"));
         assert!(celseq2.starsolo_hint().contains("--soloCBstart 7"));
+    }
+
+    #[test]
+    fn five_prime_v1_v2_is_one_class_on_737k_onlist() {
+        let s = spec("10x_5prime_v1");
+        assert_eq!(s.whitelist.as_ref().map(|w| w.filename), Some("737K-august-2016.txt.gz"));
+        assert_eq!((s.r1_cb_len, s.r1_umi_len), (16, 10));
+        assert!(s.display_name.contains("v1 or v2"));
+        // One 5' v1/v2 entry; Cell Ranger has no SC5P-PE-v2 chemistry.
+        assert!(ASSAYS.iter().all(|a| a.id != "10x_5prime_v2"));
+        assert!(ASSAYS
+            .iter()
+            .flat_map(|a| a.tool_hints.iter())
+            .all(|(_, h)| !h.contains("SC5P-PE-v2")));
+        // The GEM-X 5' onlist belongs to 5' v3 only.
+        let gemx5: Vec<_> = ASSAYS
+            .iter()
+            .filter(|a| a.whitelist.as_ref().map(|w| w.filename) == Some("3M-5pgex-jan-2023.txt.gz"))
+            .map(|a| a.id)
+            .collect();
+        assert_eq!(gemx5, vec!["10x_5prime_v3"]);
     }
 
     #[test]
