@@ -8,9 +8,8 @@
 
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
-use crate::kmerpanel::KmerPanel;
+use crate::kmerpanel::{KmerPanel, PanelCache};
 use crate::sexpanel::scan_encoded_windows;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -52,8 +51,8 @@ impl AtacSignal {
 
 /// The .atacpanel lookups, one per species (#species header), loaded once.
 fn species_panels() -> &'static HashMap<String, KmerPanel<Cat>> {
-    static R: OnceLock<HashMap<String, KmerPanel<Cat>>> = OnceLock::new();
-    R.get_or_init(|| KmerPanel::load_by_species("atacpanel", parse_cat))
+    static R: PanelCache<HashMap<String, KmerPanel<Cat>>> = PanelCache::new();
+    R.get(|| KmerPanel::load_by_species("atacpanel", parse_cat))
 }
 
 /// Whether any ATAC panel is loaded (else classify returns "unknown").

@@ -8,6 +8,41 @@ use rustc_hash::FxHashMap;
 
 use crate::sexpanel::encode_kmer_both_strands;
 
+/// A panel lookup built on first use. On wasm it rebuilds when the front-end injects more
+/// panel text, so a species panel loaded after the first check still takes effect.
+pub struct PanelCache<V: 'static>(std::sync::Mutex<Option<(u64, &'static V)>>);
+
+#[allow(clippy::new_without_default)] // const new backs the statics
+impl<V> PanelCache<V> {
+    pub const fn new() -> Self {
+        Self(std::sync::Mutex::new(None))
+    }
+
+    // ponytail: each wasm rebuild leaks the old lookup; injections are one per species file.
+    pub fn get(&self, build: impl FnOnce() -> V) -> &'static V {
+        let gen = generation();
+        let mut slot = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        match *slot {
+            Some((g, v)) if g == gen => v,
+            _ => {
+                let v: &'static V = Box::leak(Box::new(build()));
+                *slot = Some((gen, v));
+                v
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn generation() -> u64 {
+    0
+}
+
+#[cfg(target_arch = "wasm32")]
+fn generation() -> u64 {
+    wasm_store::generation()
+}
+
 /// Fallback k when a panel omits its #k header (all shipped panels are k=50).
 pub const DEFAULT_K: usize = 50;
 
@@ -112,6 +147,12 @@ pub mod wasm_store {
 
     thread_local! {
         static PANELS: RefCell<HashMap<String, Vec<String>>> = RefCell::new(HashMap::new());
+        static GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Bumped on every injection so [super::PanelCache] knows to rebuild.
+    pub fn generation() -> u64 {
+        GENERATION.with(|g| g.get())
     }
 
     /// Append one panel's text under ext (multiple files of the same ext merge, as on
@@ -124,6 +165,7 @@ pub mod wasm_store {
                 .or_default()
                 .push(text)
         });
+        GENERATION.with(|g| g.set(g.get() + 1));
     }
 
     pub fn texts(ext: &str) -> Vec<String> {

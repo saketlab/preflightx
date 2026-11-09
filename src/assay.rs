@@ -231,7 +231,10 @@ mod tests {
     #[test]
     fn five_prime_v1_v2_is_one_class_on_737k_onlist() {
         let s = spec("10x_5prime_v1");
-        assert_eq!(s.whitelist.as_ref().map(|w| w.filename), Some("737K-august-2016.txt.gz"));
+        assert_eq!(
+            s.whitelist.as_ref().map(|w| w.filename),
+            Some("737K-august-2016.txt.gz")
+        );
         assert_eq!((s.r1_cb_len, s.r1_umi_len), (16, 10));
         assert!(s.display_name.contains("v1 or v2"));
         // One 5' v1/v2 entry; Cell Ranger has no SC5P-PE-v2 chemistry.
@@ -243,7 +246,9 @@ mod tests {
         // The GEM-X 5' onlist belongs to 5' v3 only.
         let gemx5: Vec<_> = ASSAYS
             .iter()
-            .filter(|a| a.whitelist.as_ref().map(|w| w.filename) == Some("3M-5pgex-jan-2023.txt.gz"))
+            .filter(|a| {
+                a.whitelist.as_ref().map(|w| w.filename) == Some("3M-5pgex-jan-2023.txt.gz")
+            })
             .map(|a| a.id)
             .collect();
         assert_eq!(gemx5, vec!["10x_5prime_v3"]);

@@ -15,9 +15,8 @@
 use rustc_hash::FxHashMap;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
-use crate::kmerpanel::KmerPanel;
+use crate::kmerpanel::{KmerPanel, PanelCache};
 use crate::sexpanel::scan_encoded_windows;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -68,8 +67,8 @@ impl EndReport {
 
 /// The .endpanel lookups, one per species (#species header), loaded once.
 fn species_panels() -> &'static HashMap<String, KmerPanel<End>> {
-    static R: OnceLock<HashMap<String, KmerPanel<End>>> = OnceLock::new();
-    R.get_or_init(|| KmerPanel::load_by_species("endpanel", parse_end))
+    static R: PanelCache<HashMap<String, KmerPanel<End>>> = PanelCache::new();
+    R.get(|| KmerPanel::load_by_species("endpanel", parse_end))
 }
 
 /// Whether any end panel is cached (else classify returns a clean "unknown").

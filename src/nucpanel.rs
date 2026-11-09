@@ -10,9 +10,8 @@
 
 use rustc_hash::FxHashMap;
 use serde::Serialize;
-use std::sync::OnceLock;
 
-use crate::kmerpanel::KmerPanel;
+use crate::kmerpanel::{KmerPanel, PanelCache};
 use crate::sexpanel::scan_encoded_windows;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,8 +59,8 @@ pub struct NucReport {
 
 /// The .nucpanel lookup, loaded from the panel cache dir once.
 fn loaded() -> &'static KmerPanel<Region> {
-    static R: OnceLock<KmerPanel<Region>> = OnceLock::new();
-    R.get_or_init(|| KmerPanel::load("nucpanel", parse_region))
+    static R: PanelCache<KmerPanel<Region>> = PanelCache::new();
+    R.get(|| KmerPanel::load("nucpanel", parse_region))
 }
 
 /// Whether any nucleus panel is loaded (else classify degrades to "unknown").

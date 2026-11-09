@@ -62,8 +62,8 @@ pub fn load_whitelist(name: &str, bytes: Vec<u8>) {
     fastq::vfs::put(&format!("{WL_DIR}/{name}"), bytes);
 }
 
-/// Inject a k-mer panel; no panel cache dir exists on wasm, so without this the sc-vs-sn
-/// and 3'/5' verdicts stay None. kind is "endpanel" or "nucpanel". Call before [check].
+/// Inject a k-mer panel; no panel cache dir exists on wasm, so without this the sc-vs-sn,
+/// 3'/5' and ATAC verdicts stay None. kind is "endpanel", "nucpanel" or "atacpanel".
 #[wasm_bindgen]
 pub fn load_panel(kind: &str, bytes: Vec<u8>) {
     crate::kmerpanel::store_panel(kind, String::from_utf8_lossy(&bytes).into_owned());
@@ -91,26 +91,32 @@ fn with_reads<T>(r1: Vec<u8>, r2: Vec<u8>, f: impl FnOnce(bool) -> T) -> T {
     out
 }
 
+/// Empty species means none known.
+fn hint(species: &str) -> Option<&str> {
+    Some(species.trim()).filter(|s| !s.is_empty())
+}
+
 /// Full report. r1/r2 are raw uploaded bytes (gzip auto-detected); empty r2 is
-/// single-end.
+/// single-end. species picks the end and ATAC panels, as the CLI's detected species does.
 #[wasm_bindgen]
-pub fn check(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, JsValue> {
+pub fn check(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize, species: &str) -> Result<String, JsValue> {
+    let sp = hint(species);
     with_reads(r1, r2, |has_r2| {
         if has_r2 {
-            run_check(n_reads)
+            run_check(n_reads, sp)
         } else {
-            run_check_single(n_reads)
+            run_check_single(n_reads, sp)
         }
     })
 }
 
 /// Chemistry and assay detection need both mates, so they are skipped here.
-fn run_check_single(n: usize) -> Result<String, JsValue> {
+fn run_check_single(n: usize, sp: Option<&str>) -> Result<String, JsValue> {
     let r1 = Path::new(R1);
     let bulk = size::bulk_or_sc(r1, n).map_err(err_to_js)?;
     let sz = size::size_sanity(r1, None, n).map_err(err_to_js)?;
     let comp = composition::composition(r1, n).map_err(err_to_js)?;
-    let (nucleus, end) = report::panel_verdicts(r1, None, n, None);
+    let (nucleus, end) = report::panel_verdicts(r1, None, n, sp);
     let classification = report::Classification::derive(&None, &bulk, &nucleus);
     let full = report::FullReport {
         r1: R1.to_string(),
@@ -129,17 +135,17 @@ fn run_check_single(n: usize) -> Result<String, JsValue> {
     to_js(&full)
 }
 
-fn run_check(n: usize) -> Result<String, JsValue> {
+fn run_check(n: usize, sp: Option<&str>) -> Result<String, JsValue> {
     let r1 = Path::new(R1);
     let r2 = Path::new(R2);
     let (chem, assay_detection) =
-        report::FullReport::chem_with_fallback(r1, r2, n, wl_cache(), None).map_err(err_to_js)?;
+        report::FullReport::chem_with_fallback(r1, r2, n, wl_cache(), sp).map_err(err_to_js)?;
     let bulk =
         size::reconcile_with_chemistry(size::bulk_or_sc(r1, n).map_err(err_to_js)?, Some(&chem));
     let sz = size::size_sanity(r1, Some(r2), n).map_err(err_to_js)?;
     let cdna = fastq::longer_read(r1, r2, 256).map_err(err_to_js)?;
     let comp = composition::composition(cdna, n).map_err(err_to_js)?;
-    let (nucleus, end) = report::panel_verdicts(r1, Some(r2), n, None);
+    let (nucleus, end) = report::panel_verdicts(r1, Some(r2), n, sp);
     let chemistry = Some(chem);
     let classification = report::Classification::derive(&chemistry, &bulk, &nucleus);
     let full = report::FullReport {
@@ -170,10 +176,16 @@ pub fn detect_assay(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, 
 
 /// 10x chemistry detection only. Uses a stashed onlist when one is loaded.
 #[wasm_bindgen]
-pub fn chem(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize) -> Result<String, JsValue> {
+pub fn chem(r1: Vec<u8>, r2: Vec<u8>, n_reads: usize, species: &str) -> Result<String, JsValue> {
     let result = with_pair(r1, r2, || {
-        chemistry::detect(Path::new(R1), Path::new(R2), n_reads, wl_cache(), None)
-            .map_err(err_to_js)
+        chemistry::detect(
+            Path::new(R1),
+            Path::new(R2),
+            n_reads,
+            wl_cache(),
+            hint(species),
+        )
+        .map_err(err_to_js)
     });
     to_js(&result?)
 }

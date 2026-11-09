@@ -961,7 +961,7 @@ async function run(kind) {
     // Yield so the status paints before the synchronous wasm call.
     await new Promise(r => setTimeout(r, 0));
     const t0 = performance.now();
-    const json = kind === 'check' ? check(b1, b2, n) : detect_assay(b1, b2, n);
+    const json = kind === 'check' ? check(b1, b2, n, '') : detect_assay(b1, b2, n);
     const r = JSON.parse(json);
     if (kind === 'check') {
       const sx = await runSex(b1, b2, setStatus);
@@ -1126,9 +1126,10 @@ async function runOne(ctx) {
     ctx.resCell.textContent = 'analyzing…';
     if (b2.length) await ensureWhitelists(b1, b2, n);
     await kmerPanelsReady;   // ensure sc/sn + 3'/5' panels are injected
+    await loadSpeciesPanels(ctx.species);
     await new Promise(r => setTimeout(r, 0));
     const t0 = performance.now();
-    const r = JSON.parse(check(b1, b2, n));
+    const r = JSON.parse(check(b1, b2, n, (ctx.species && ctx.species.scientific) || ''));
     const sx = await runSex(b1, b2, m => { ctx.resCell.textContent = m; }, ctx.species);
     if (sx) r.sex = sx;
     const ms = performance.now() - t0;
@@ -1412,12 +1413,28 @@ els.accInput.addEventListener('keydown', e => { if (e.key === 'Enter') fetchRuns
 // Kicked off in the background (the nucpanel is multi-MB) so it never blocks startup;
 // the check paths await `kmerPanelsReady` before scanning. Reuses fetchAndLoad.
 const KMER_PANELS = [
-  { name: 'nucpanel', urls: ['data/panels/human.nucpanel'] },
-  { name: 'endpanel', urls: ['data/panels/human.endpanel'] },
-  { name: 'atacpanel', urls: ['data/panels/human_ubiq.atacpanel'] },
+  { name: 'human.nucpanel', urls: ['data/panels/human.nucpanel'] },
+  { name: 'human.endpanel', urls: ['data/panels/human.endpanel'] },
+  { name: 'human_ubiq.atacpanel', urls: ['data/panels/human_ubiq.atacpanel'] },
 ];
+const panelKind = name => name.split('.').pop();
 let kmerPanelsReady = Promise.resolve();
-const loadKmerPanels = () => fetchAndLoad(KMER_PANELS, load_panel, new Set());
+const kmerLoaded = new Set();
+const loadKmerPanels = () => fetchAndLoad(KMER_PANELS, (name, bytes) => load_panel(panelKind(name), bytes), kmerLoaded);
+// The run's organism's end/nuc/ATAC panels, as the CLI picks them by detected species.
+// Human loads at startup; mouse files carry the common name. A missing file leaves that verdict off.
+function loadSpeciesPanels(spec) {
+  if (!spec || !spec.scientific) return Promise.resolve();
+  const sci = spec.scientific.trim().replace(/\s+/g, '_');
+  const low = sci.toLowerCase();
+  if (low === 'homo_sapiens' || low === 'human') return Promise.resolve();
+  const bases = low === 'mus_musculus' ? ['mouse', sci] : [sci];
+  const entries = ['endpanel', 'nucpanel', 'atacpanel'].map(kind => ({
+    name: `${sci}.${kind}`,
+    urls: bases.map(b => `data/panels/${b}.${kind}`),
+  }));
+  return fetchAndLoad(entries, (name, bytes) => load_panel(panelKind(name), bytes), kmerLoaded);
+}
 
 (async () => {
   try {
